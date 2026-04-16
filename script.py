@@ -7,8 +7,8 @@ from datetime import datetime, timedelta
 
 STATION = "VABB"
 
-start_date = datetime(2016, 1, 1)
-end_date = datetime(2026, 1, 1)
+start_date = datetime(2005, 1, 1)
+end_date = datetime(2026, 4, 1)
 
 delta = timedelta(days=30)
 
