@@ -1,441 +1,452 @@
-import torch
-print(torch.cuda.is_available())
-import torch.nn as nn
-import pandas as pd
-import numpy as np
-from sklearn.preprocessing import MinMaxScaler
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-import matplotlib.pyplot as plt
+import time
+import random
+import os
+
 import matplotlib.gridspec as gridspec
-import math
-import warnings
-warnings.filterwarnings("ignore")
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.preprocessing import RobustScaler
 
-# =========================================================
-# CONFIG — tweak these to experiment
-# =========================================================
-CSV_FILE    = "clean_weather_data.csv"
-SEQ_LENGTH  = 24     # 24 hours of history (48 × 30-min steps)
-PRED_STEP   = 12     # 6 hours ahead      (12 × 30-min steps)
-TRAIN_RATIO = 0.8
-EPOCHS      = 150
-BATCH_SIZE  = 256
-PATIENCE    = 20
-HIDDEN_SIZE = 256
-NUM_LAYERS  = 3
-DROPOUT     = 0.25
-NUM_HEADS   = 8
-LR          = 1e-3
+try:
+    from xgboost import XGBRegressor
+except ImportError:
+    XGBRegressor = None
 
-# =========================================================
-# 1. LOAD DATA
-# =========================================================
-df = pd.read_csv(CSV_FILE)
-df["datetime"] = pd.to_datetime(df["datetime"])
-df = df.sort_values("datetime").reset_index(drop=True)
+try:
+    from lightgbm import LGBMRegressor
+except ImportError:
+    LGBMRegressor = None
 
-print(f"Records loaded : {len(df)}")
-print(f"Date range     : {df['datetime'].min()} → {df['datetime'].max()}")
-print(f"Temp range     : {df['temp'].min():.1f}°C – {df['temp'].max():.1f}°C")
 
-# =========================================================
-# 2. FEATURE ENGINEERING
-# =========================================================
+CONFIG = {
+    "CSV_FILE": "clean_weather_data.csv",
+    "SEED": 42,
+    "SEQ_LENGTH": 72,
+    "PRED_STEP": 12,
+    "TRAIN_RATIO": 0.70,
+    "VAL_RATIO": 0.15,
+}
 
-# --- Cyclic time (preserves periodicity) ---
-df["hour_sin"]      = np.sin(2 * np.pi * df["datetime"].dt.hour / 24)
-df["hour_cos"]      = np.cos(2 * np.pi * df["datetime"].dt.hour / 24)
-df["month_sin"]     = np.sin(2 * np.pi * df["datetime"].dt.month / 12)
-df["month_cos"]     = np.cos(2 * np.pi * df["datetime"].dt.month / 12)
-df["doy_sin"]       = np.sin(2 * np.pi * df["datetime"].dt.dayofyear / 365)
-df["doy_cos"]       = np.cos(2 * np.pi * df["datetime"].dt.dayofyear / 365)
-df["wday_sin"]      = np.sin(2 * np.pi * df["datetime"].dt.weekday / 7)
-df["wday_cos"]      = np.cos(2 * np.pi * df["datetime"].dt.weekday / 7)
 
-# --- Wind direction as cyclic (0° and 360° are same!) ---
-if "wind_dir" in df.columns:
-    df["wdir_sin"] = np.sin(np.deg2rad(df["wind_dir"]))
-    df["wdir_cos"] = np.cos(np.deg2rad(df["wind_dir"]))
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
 
-# --- Rolling stats (multi-window trend context) ---
-for w in [3, 6, 12, 24, 48]:
-    df[f"temp_r{w}_mean"] = df["temp"].rolling(w, min_periods=1).mean()
-    df[f"temp_r{w}_std"]  = df["temp"].rolling(w, min_periods=1).std().fillna(0)
 
-for w in [6, 24]:
-    df[f"pres_r{w}"]      = df["pressure"].rolling(w, min_periods=1).mean()
-    df[f"wind_r{w}"]      = df["wind_speed"].rolling(w, min_periods=1).mean()
+def build_features(csv_path):
+    df = pd.read_csv(csv_path)
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    df = df.sort_values("datetime").reset_index(drop=True)
 
-# --- Lag features (explicit look-back) ---
-for lag in [1, 2, 3, 6, 12, 24, 48]:
-    df[f"temp_lag{lag}"] = df["temp"].shift(lag)
+    if "humidity" not in df.columns:
+        df["humidity"] = 60.0
 
-# --- Tendency features (forecaster's edge) ---
-df["pres_diff1"]  = df["pressure"].diff(1)
-df["pres_diff6"]  = df["pressure"].diff(6)
-df["pres_diff12"] = df["pressure"].diff(12)
-df["temp_diff1"]  = df["temp"].diff(1)
-df["temp_diff6"]  = df["temp"].diff(6)
+    vapor = (df["humidity"] / 100.0) * 6.105 * np.exp((17.27 * df["temp"]) / (237.7 + df["temp"]))
+    df["apparent_temp"] = df["temp"] + 0.33 * vapor - 4.0
 
-# --- Visibility log-transform (right-skewed) ---
-df["vis_log"] = np.log1p(df["visibility"])
+    hr = df["datetime"].dt.hour
+    dow = df["datetime"].dt.dayofweek
+    doy = df["datetime"].dt.dayofyear
 
-# =========================================================
-# 3. FEATURE LIST
-# =========================================================
-features = [
-    # Core meteorological
-    "temp", "wind_speed", "pressure", "vis_log",
-    # Cyclic time
-    "hour_sin", "hour_cos", "month_sin", "month_cos",
-    "doy_sin", "doy_cos", "wday_sin", "wday_cos",
-    # Rolling means
-    "temp_r3_mean", "temp_r6_mean", "temp_r12_mean",
-    "temp_r24_mean", "temp_r48_mean",
-    # Rolling std
-    "temp_r3_std", "temp_r6_std", "temp_r12_std",
-    # Pressure & wind rolling
-    "pres_r6", "pres_r24", "wind_r6", "wind_r24",
-    # Lag features
-    "temp_lag1", "temp_lag2", "temp_lag3",
-    "temp_lag6", "temp_lag12", "temp_lag24", "temp_lag48",
-    # Tendency
-    "pres_diff1", "pres_diff6", "pres_diff12",
-    "temp_diff1", "temp_diff6",
-]
+    hr_ang = 2.0 * np.pi * hr / 24.0
+    doy_ang = 2.0 * np.pi * doy / 365.25
 
-# Add wind_dir cyclic if column exists
-if "wind_dir" in df.columns:
-    features += ["wdir_sin", "wdir_cos"]
+    df["hr_sin"] = np.sin(hr_ang)
+    df["hr_cos"] = np.cos(hr_ang)
+    df["dow_sin"] = np.sin(2 * np.pi * dow / 7.0)
+    df["dow_cos"] = np.cos(2 * np.pi * dow / 7.0)
+    df["doy_sin"] = np.sin(doy_ang)
+    df["doy_cos"] = np.cos(doy_ang)
 
-df = df.dropna(subset=features).reset_index(drop=True)
-INPUT_SIZE = len(features)
+    # Solar zenith proxy from harmonic hour/year components.
+    solar_decl = 0.409 * np.sin(doy_ang - 1.39)
+    cos_zen = np.cos(hr_ang) * np.cos(solar_decl)
+    cos_zen = np.clip(cos_zen, -1.0, 1.0)
+    df["solar_zenith_proxy"] = np.arccos(cos_zen) / np.pi
 
-print(f"\nFeatures used  : {INPUT_SIZE}")
-print(f"Clean samples  : {len(df)}")
+    df["temp_diff_1"] = df["temp"].diff().fillna(0)
+    df["pressure_diff_1"] = df["pressure"].diff().fillna(0)
+    df["wind_diff_1"] = df["wind_speed"].diff().fillna(0)
 
-# =========================================================
-# 4. SCALE — fit only on train split (no data leakage)
-# =========================================================
-data      = df[features].values
-split_raw = int(len(data) * TRAIN_RATIO)
+    # Discrete Laplacian captures acceleration/inflection in heating-cooling cycles.
+    df["temp_laplacian"] = (df["temp"].shift(-1) - 2.0 * df["temp"] + df["temp"].shift(1)).fillna(0)
 
-# feature_range=(-1, 1) works better with LSTM tanh activations
-scaler = MinMaxScaler(feature_range=(-1, 1))
-scaler.fit(data[:split_raw])
-data_scaled = scaler.transform(data)
+    for w in [6, 12, 24, 48]:
+        df[f"temp_mean_{w}"] = df["temp"].rolling(w).mean().bfill()
+        df[f"temp_std_{w}"] = df["temp"].rolling(w).std().bfill()
+        df[f"temp_min_{w}"] = df["temp"].rolling(w).min().bfill()
+        df[f"temp_max_{w}"] = df["temp"].rolling(w).max().bfill()
 
-# =========================================================
-# 5. SEQUENCE BUILDER
-# =========================================================
-def make_sequences(arr, seq_len, pred_step):
-    X, y = [], []
-    for i in range(len(arr) - seq_len - pred_step + 1):
-        X.append(arr[i : i + seq_len])
-        y.append(arr[i + seq_len + pred_step - 1][0])   # temp = column 0
-    return np.array(X, dtype=np.float32), np.array(y, dtype=np.float32)
+    for lag in [1, 2, 6, 12]:
+        df[f"temp_lag_{lag}"] = df["temp"].shift(lag).bfill()
 
-X_all, y_all = make_sequences(data_scaled, SEQ_LENGTH, PRED_STEP)
+    feature_cols = [
+        "temp",
+        "apparent_temp",
+        "pressure",
+        "wind_speed",
+        "humidity",
+        "hr_sin",
+        "hr_cos",
+        "dow_sin",
+        "dow_cos",
+        "doy_sin",
+        "doy_cos",
+        "solar_zenith_proxy",
+        "temp_diff_1",
+        "pressure_diff_1",
+        "wind_diff_1",
+        "temp_laplacian",
+    ]
 
-split    = int(len(X_all) * TRAIN_RATIO)
-X_train, X_test = X_all[:split], X_all[split:]
-y_train, y_test = y_all[:split], y_all[split:]
+    feature_cols += [c for c in df.columns if c.startswith("temp_mean_")]
+    feature_cols += [c for c in df.columns if c.startswith("temp_std_")]
+    feature_cols += [c for c in df.columns if c.startswith("temp_min_")]
+    feature_cols += [c for c in df.columns if c.startswith("temp_max_")]
+    feature_cols += [c for c in df.columns if c.startswith("temp_lag_")]
 
-print(f"Train sequences: {len(X_train)}")
-print(f"Test  sequences: {len(X_test)}")
+    return df, feature_cols
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Device         : {device}")
-if device.type == "cuda":
-    print(f"GPU            : {torch.cuda.get_device_name(0)}")
-    torch.backends.cudnn.benchmark = True
 
-X_train_t = torch.from_numpy(X_train).to(device)
-y_train_t = torch.from_numpy(y_train).to(device)
-X_test_t  = torch.from_numpy(X_test).to(device)
-y_test_t  = torch.from_numpy(y_test).to(device)
+def create_sequences(data_scaled, seq_len, pred_step):
+    x_seq, y_seq, target_idx = [], [], []
+    max_start = len(data_scaled) - seq_len - pred_step + 1
+    for i in range(max_start):
+        t_idx = i + seq_len + pred_step - 1
+        x_seq.append(data_scaled[i : i + seq_len])
+        y_seq.append(data_scaled[t_idx, 0])
+        target_idx.append(t_idx)
+    return (
+        np.asarray(x_seq, dtype=np.float32),
+        np.asarray(y_seq, dtype=np.float32),
+        np.asarray(target_idx, dtype=np.int64),
+    )
 
-# =========================================================
-# 6. MODEL — BiLSTM + Multi-Head Temporal Attention
-# =========================================================
-class TemporalAttention(nn.Module):
-    def __init__(self, dim, num_heads=8, dropout=0.1):
-        super().__init__()
-        self.attn = nn.MultiheadAttention(dim, num_heads, dropout=dropout, batch_first=True)
-        self.norm = nn.LayerNorm(dim)
 
-    def forward(self, x):
-        out, _ = self.attn(x, x, x)
-        return self.norm(x + out)
+def flatten_sequences(x_seq, feature_cols, seq_len):
+    x_flat = x_seq.reshape(x_seq.shape[0], -1)
+    flat_cols = []
+    for t in range(seq_len):
+        lag = seq_len - 1 - t
+        for feat in feature_cols:
+            flat_cols.append(f"{feat}_t-{lag}")
+    return x_flat, flat_cols
 
-class WeatherForecastModel(nn.Module):
-    def __init__(self, input_size, hidden_size=256,
-                 num_layers=3, dropout=0.25, num_heads=8):
-        super().__init__()
 
-        self.input_proj = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
-            nn.LayerNorm(hidden_size),
-            nn.GELU(),
-        )
-
-        self.lstm = nn.LSTM(
-            hidden_size, hidden_size,
-            num_layers=num_layers,
-            batch_first=True,
-            dropout=dropout if num_layers > 1 else 0.0,
-            bidirectional=True,
-        )
-
-        self.bidir_proj = nn.Sequential(
-            nn.Linear(hidden_size * 2, hidden_size),
-            nn.LayerNorm(hidden_size),
-        )
-
-        self.attn = TemporalAttention(hidden_size, num_heads=num_heads, dropout=0.1)
-
-        self.pool_norm = nn.LayerNorm(hidden_size * 2)
-        self.pool_drop = nn.Dropout(dropout)
-
-        self.head = nn.Sequential(
-            nn.Linear(hidden_size * 2, 256),
-            nn.LayerNorm(256),
-            nn.GELU(),
-            nn.Dropout(dropout * 0.5),
-            nn.Linear(256, 128),
-            nn.GELU(),
-            nn.Dropout(dropout * 0.3),
-            nn.Linear(128, 64),
-            nn.GELU(),
-            nn.Linear(64, 1),
-        )
-
-    def forward(self, x):
-        x = self.input_proj(x)
-        x, _ = self.lstm(x)
-        x = self.bidir_proj(x)
-        x = self.attn(x)
-        avg = x.mean(dim=1)
-        mx  = x.max(dim=1).values
-        out = torch.cat([avg, mx], dim=1)
-        out = self.pool_norm(out)
-        out = self.pool_drop(out)
-        return self.head(out)
-
-model = WeatherForecastModel(
-    input_size=INPUT_SIZE,
-    hidden_size=HIDDEN_SIZE,
-    num_layers=NUM_LAYERS,
-    dropout=DROPOUT,
-    num_heads=NUM_HEADS,
-).to(device)
-
-n_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-print(f"Model params   : {n_params:,}")
-
-# =========================================================
-# 7. TRAINING SETUP
-# =========================================================
-criterion = nn.HuberLoss(delta=1.0)
-optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
-
-def lr_lambda(epoch):
-    warmup = 5
-    if epoch < warmup:
-        return (epoch + 1) / warmup
-    prog = (epoch - warmup) / max(1, EPOCHS - warmup)
-    return 0.05 + 0.95 * 0.5 * (1 + math.cos(math.pi * prog))
-
-scheduler = torch.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda)
-
-# =========================================================
-# 8. TRAIN LOOP WITH EARLY STOPPING
-# =========================================================
-train_losses, val_losses = [], []
-best_val_loss  = float("inf")
-best_state     = None
-patience_count = 0
-n_train        = len(X_train_t)
-
-print("\nTraining...\n" + "─" * 60)
-
-for epoch in range(EPOCHS):
-    model.train()
-    perm       = torch.randperm(n_train, device=device)
-    epoch_loss = 0.0
-    n_batches  = 0
-
-    for i in range(0, n_train, BATCH_SIZE):
-        idx = perm[i : i + BATCH_SIZE]
-        xb  = X_train_t[idx]
-        yb  = y_train_t[idx].unsqueeze(1)
-
-        optimizer.zero_grad(set_to_none=True)
-        loss = criterion(model(xb), yb)
-        loss.backward()
-        nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
-
-        epoch_loss += loss.item()
-        n_batches  += 1
-
-    scheduler.step()
-
-    model.eval()
-    with torch.no_grad():
-        val_loss = criterion(
-            model(X_test_t), y_test_t.unsqueeze(1)
-        ).item()
-
-    avg_train = epoch_loss / n_batches
-    train_losses.append(avg_train)
-    val_losses.append(val_loss)
-
-    if val_loss < best_val_loss:
-        best_val_loss  = val_loss
-        best_state     = {k: v.clone() for k, v in model.state_dict().items()}
-        patience_count = 0
-        marker = " ✓ best"
-    else:
-        patience_count += 1
-        marker = ""
-
-    if (epoch + 1) % 10 == 0:
-        print(f"Epoch {epoch+1:3d}/{EPOCHS}  "
-              f"train={avg_train:.5f}  val={val_loss:.5f}  "
-              f"lr={scheduler.get_last_lr()[0]:.6f}{marker}")
-
-    if patience_count >= PATIENCE:
-        print(f"\nEarly stopping at epoch {epoch + 1}")
-        break
-
-model.load_state_dict(best_state)
-print(f"\nBest val loss  : {best_val_loss:.6f}")
-
-# =========================================================
-# 9. PREDICT & INVERSE TRANSFORM
-# =========================================================
-model.eval()
-with torch.no_grad():
-    raw_preds = model(X_test_t).cpu().numpy().flatten()
-raw_true  = y_test_t.cpu().numpy()
-
-def inv_temp(vals):
-    dummy = np.zeros((len(vals), INPUT_SIZE))
-    dummy[:, 0] = vals
+def inverse_temp_scale(scaler, feature_count, vec):
+    dummy = np.zeros((len(vec), feature_count), dtype=np.float32)
+    dummy[:, 0] = vec
     return scaler.inverse_transform(dummy)[:, 0]
 
-preds_actual = inv_temp(raw_preds)
-y_actual     = inv_temp(raw_true)
 
-# =========================================================
-# 10. EVALUATE
-# =========================================================
-mae  = mean_absolute_error(y_actual, preds_actual)
-rmse = math.sqrt(mean_squared_error(y_actual, preds_actual))
-mape = np.mean(np.abs((y_actual - preds_actual) / (np.abs(y_actual) + 1e-8))) * 100
-w1   = np.mean(np.abs(y_actual - preds_actual) <= 1.0) * 100
-w2   = np.mean(np.abs(y_actual - preds_actual) <= 2.0) * 100
-bias = np.mean(preds_actual - y_actual)
+def smape(y_true, y_pred):
+    num = 2.0 * np.abs(y_true - y_pred)
+    den = np.maximum(np.abs(y_true) + np.abs(y_pred), 1e-3)
+    return float(np.mean(num / den) * 100.0)
 
-print("\n" + "═" * 50)
-print("       EVALUATION  —  6-Hour Temperature Forecast")
-print("═" * 50)
-print(f"  MAE          : {mae:.3f} °C")
-print(f"  RMSE         : {rmse:.3f} °C")
-print(f"  MAPE         : {mape:.2f} %")
-print(f"  Bias (mean)  : {bias:+.3f} °C")
-print(f"  Within ±1°C  : {w1:.1f}%  of test predictions")
-print(f"  Within ±2°C  : {w2:.1f}%  of test predictions")
-print(f"  Test samples : {len(y_actual)}")
-print("═" * 50)
 
-# =========================================================
-# 11. VISUALIZE
-# =========================================================
-N      = min(400, len(y_actual))
-errors = preds_actual - y_actual
+def evaluate_model(name, model, x_train, y_train, x_test, y_test, scaler, feature_count):
+    start = time.time()
+    model.fit(x_train, y_train)
+    preds_scaled = model.predict(x_test)
+    train_seconds = time.time() - start
 
-fig = plt.figure(figsize=(18, 12))
-gs  = gridspec.GridSpec(3, 2, figure=fig, hspace=0.50, wspace=0.35)
+    y_pred = inverse_temp_scale(scaler, feature_count, preds_scaled)
+    y_true = inverse_temp_scale(scaler, feature_count, y_test)
 
-ax1 = fig.add_subplot(gs[0, :])
-ax1.plot(y_actual[:N], label="Actual", color="#1565C0", lw=1.5, alpha=0.9)
-ax1.plot(preds_actual[:N], label="Predicted (6hr ahead)", color="#E65100", lw=1.2, linestyle="--", alpha=0.85)
-ax1.fill_between(range(N), y_actual[:N], preds_actual[:N], alpha=0.10, color="#E65100")
-ax1.set_title(
-    f"Temperature Forecast — Next 6 Hours\n"
-    f"MAE={mae:.2f}°C   RMSE={rmse:.2f}°C   "
-    f"Within ±1°C: {w1:.0f}%   Within ±2°C: {w2:.0f}%",
-    fontsize=12, fontweight="bold"
-)
-ax1.set_xlabel("Time Step (30-min intervals)")
-ax1.set_ylabel("Temperature (°C)")
-ax1.legend(loc="upper right")
-ax1.grid(alpha=0.3)
+    metrics = {
+        "model": name,
+        "mae": float(mean_absolute_error(y_true, y_pred)),
+        "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
+        "r2": float(r2_score(y_true, y_pred)),
+        "smape": smape(y_true, y_pred),
+        "train_seconds": train_seconds,
+    }
 
-ax2 = fig.add_subplot(gs[1, 0])
-ax2.bar(range(N), errors[:N], color=["#c0392b" if e > 0 else "#27ae60" for e in errors[:N]], alpha=0.6, width=1.0)
-ax2.axhline(0, color="black", lw=0.8)
-ax2.axhline(1, color="#c0392b", lw=0.8, linestyle=":", label="+1°C")
-ax2.axhline(-1, color="#27ae60", lw=0.8, linestyle=":", label="-1°C")
-ax2.set_title("Prediction Error (Predicted − Actual)", fontsize=11, fontweight="bold")
-ax2.set_xlabel("Time Step")
-ax2.set_ylabel("Error (°C)")
-ax2.legend(fontsize=8)
-ax2.grid(alpha=0.3)
+    if hasattr(model, "feature_importances_"):
+        importances = np.asarray(model.feature_importances_, dtype=np.float64)
+    else:
+        importances = np.zeros(x_train.shape[1], dtype=np.float64)
 
-ax3 = fig.add_subplot(gs[1, 1])
-ax3.hist(errors, bins=60, color="#1976D2", alpha=0.75, edgecolor="white")
-ax3.axvline(0, color="red", lw=1.5, linestyle="--", label="Zero error")
-ax3.axvline(np.mean(errors), color="orange", lw=1.2, linestyle="-.", label=f"Mean={np.mean(errors):+.2f}°C")
-ax3.set_title("Error Distribution", fontsize=11, fontweight="bold")
-ax3.set_xlabel("Error (°C)")
-ax3.set_ylabel("Count")
-ax3.legend()
-ax3.grid(alpha=0.3)
+    return metrics, y_true, y_pred, importances
 
-ax4 = fig.add_subplot(gs[2, 0])
-ax4.plot(train_losses, label="Train Loss", color="#2ecc71", lw=1.5)
-ax4.plot(val_losses, label="Val Loss", color="#e74c3c", lw=1.5)
-best_ep = int(np.argmin(val_losses))
-ax4.axvline(best_ep, color="gray", lw=1.0, linestyle=":", label=f"Best epoch {best_ep+1}")
-ax4.set_title("Training & Validation Loss (Huber)", fontsize=11, fontweight="bold")
-ax4.set_xlabel("Epoch")
-ax4.set_ylabel("Loss")
-ax4.legend()
-ax4.grid(alpha=0.3)
 
-ax5 = fig.add_subplot(gs[2, 1])
-ax5.scatter(y_actual, preds_actual, alpha=0.2, s=5, color="#7B1FA2")
-mn, mx = y_actual.min(), y_actual.max()
-ax5.plot([mn, mx], [mn, mx], "r--", lw=1.5, label="Perfect fit")
-ax5.set_title("Actual vs Predicted (Scatter)", fontsize=11, fontweight="bold")
-ax5.set_xlabel("Actual (°C)")
-ax5.set_ylabel("Predicted (°C)")
-ax5.legend()
-ax5.grid(alpha=0.3)
+def build_models(seed):
+    models = {
+        "RandomForest": RandomForestRegressor(
+            n_estimators=200,
+            max_depth=12,
+            n_jobs=-1,
+            random_state=seed,
+        )
+    }
 
-plt.suptitle("Weather Forecast — BiLSTM + Multi-Head Temporal Attention", fontsize=14, fontweight="bold", y=1.01)
-plt.savefig("forecast_results.png", dpi=150, bbox_inches="tight")
-plt.show()
-print("\nPlot saved → forecast_results.png")
+    if XGBRegressor is not None:
+        models["XGBoost"] = XGBRegressor(
+            n_estimators=1000,
+            learning_rate=0.05,
+            tree_method="gpu_hist",
+            random_state=seed,
+            objective="reg:squarederror",
+            eval_metric="rmse",
+            max_depth=8,
+            subsample=0.9,
+            colsample_bytree=0.9,
+        )
 
-# =========================================================
-# 12. SAVE MODEL
-# =========================================================
-torch.save({
-    "model_state": model.state_dict(),
-    "input_size": INPUT_SIZE,
-    "hidden_size": HIDDEN_SIZE,
-    "num_layers": NUM_LAYERS,
-    "num_heads": NUM_HEADS,
-    "dropout": DROPOUT,
-    "seq_length": SEQ_LENGTH,
-    "pred_step": PRED_STEP,
-    "features": features,
-    "mae": mae,
-    "rmse": rmse,
-}, "weather_model_best.pth")
+    if LGBMRegressor is not None:
+        models["LightGBM"] = LGBMRegressor(
+            device="gpu",
+            n_estimators=1000,
+            learning_rate=0.03,
+            num_leaves=64,
+            objective="regression",
+            random_state=seed,
+            subsample=0.9,
+            colsample_bytree=0.9,
+        )
 
-print("Model saved → weather_model_best.pth")
+    return models
+
+
+def fit_with_gpu_fallback(name, model, x_train, y_train):
+    try:
+        model.fit(x_train, y_train)
+        return model, False
+    except Exception as ex:
+        msg = str(ex).lower()
+        gpu_issue = "gpu" in msg or "cuda" in msg or "opencl" in msg
+        if not gpu_issue:
+            raise
+
+        if name == "XGBoost":
+            fallback = XGBRegressor(
+                n_estimators=1000,
+                learning_rate=0.05,
+                tree_method="hist",
+                random_state=CONFIG["SEED"],
+                objective="reg:squarederror",
+                eval_metric="rmse",
+                max_depth=8,
+                subsample=0.9,
+                colsample_bytree=0.9,
+            )
+            fallback.fit(x_train, y_train)
+            return fallback, True
+
+        if name == "LightGBM":
+            fallback = LGBMRegressor(
+                device="cpu",
+                n_estimators=1000,
+                learning_rate=0.03,
+                num_leaves=64,
+                objective="regression",
+                random_state=CONFIG["SEED"],
+                subsample=0.9,
+                colsample_bytree=0.9,
+            )
+            fallback.fit(x_train, y_train)
+            return fallback, True
+
+        raise
+
+
+if __name__ == "__main__":
+    set_seed(CONFIG["SEED"])
+
+    df, feature_cols = build_features(CONFIG["CSV_FILE"])
+    raw = df[feature_cols].values
+
+    n = len(raw)
+    train_cut = int(n * CONFIG["TRAIN_RATIO"])
+    val_cut = int(n * (CONFIG["TRAIN_RATIO"] + CONFIG["VAL_RATIO"]))
+
+    scaler = RobustScaler()
+    scaler.fit(raw[:train_cut])
+    data_scaled = scaler.transform(raw)
+
+    x_seq, y, target_idx = create_sequences(data_scaled, CONFIG["SEQ_LENGTH"], CONFIG["PRED_STEP"])
+    x_flat, flat_cols = flatten_sequences(x_seq, feature_cols, CONFIG["SEQ_LENGTH"])
+
+    train_mask = target_idx < train_cut
+    val_mask = (target_idx >= train_cut) & (target_idx < val_cut)
+    test_mask = target_idx >= val_cut
+
+    x_train = x_flat[train_mask]
+    y_train = y[train_mask]
+    x_val = x_flat[val_mask]
+    y_val = y[val_mask]
+    x_test = x_flat[test_mask]
+    y_test = y[test_mask]
+
+    # Train on train+val for final benchmark, test remains untouched.
+    x_train_full = np.concatenate([x_train, x_val], axis=0)
+    y_train_full = np.concatenate([y_train, y_val], axis=0)
+
+    test_target_idx = target_idx[test_mask]
+    humidity_test = df.loc[test_target_idx, "humidity"].values
+    test_hours = df.loc[test_target_idx, "datetime"].dt.hour.values
+
+    models = build_models(CONFIG["SEED"])
+    if len(models) < 3:
+        missing = []
+        if XGBRegressor is None:
+            missing.append("xgboost")
+        if LGBMRegressor is None:
+            missing.append("lightgbm")
+        raise ImportError(
+            "Missing required libraries for full benchmark: " + ", ".join(missing)
+        )
+
+    results = []
+    predictions = {}
+    importances = {}
+
+    print(
+        f"Benchmarking tree models | train={len(x_train_full)} test={len(x_test)} | "
+        f"features={x_train_full.shape[1]}"
+    )
+
+    for name, model in models.items():
+        start_fit = time.time()
+        model_fitted, used_fallback = fit_with_gpu_fallback(name, model, x_train_full, y_train_full)
+        fit_seconds = time.time() - start_fit
+
+        preds_scaled = model_fitted.predict(x_test)
+        y_pred = inverse_temp_scale(scaler, len(feature_cols), preds_scaled)
+        y_true = inverse_temp_scale(scaler, len(feature_cols), y_test)
+
+        metrics = {
+            "model": name,
+            "mae": float(mean_absolute_error(y_true, y_pred)),
+            "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
+            "r2": float(r2_score(y_true, y_pred)),
+            "smape": smape(y_true, y_pred),
+            "train_seconds": float(fit_seconds),
+            "gpu_fallback": used_fallback,
+        }
+
+        fi = np.asarray(model_fitted.feature_importances_, dtype=np.float64)
+
+        results.append(metrics)
+        predictions[name] = (y_true, y_pred)
+        importances[name] = fi
+
+        gpu_note = " (CPU fallback)" if used_fallback else ""
+        print(
+            f"{name:12s} | MAE {metrics['mae']:.3f} | RMSE {metrics['rmse']:.3f} | "
+            f"R2 {metrics['r2']:.4f} | sMAPE {metrics['smape']:.2f}% | {fit_seconds/60:.2f} min{gpu_note}"
+        )
+
+    results_df = pd.DataFrame(results).sort_values("mae", ascending=True).reset_index(drop=True)
+    best_name = results_df.loc[0, "model"]
+    y_true_best, y_pred_best = predictions[best_name]
+    resid = y_pred_best - y_true_best
+    abs_err = np.abs(resid)
+
+    fi_best = importances[best_name]
+    fi_series = pd.Series(fi_best, index=flat_cols).sort_values(ascending=False)
+    top15 = fi_series.head(15).iloc[::-1]
+
+    hourly_mae = []
+    for h in range(24):
+        mask = test_hours == h
+        hourly_mae.append(abs_err[mask].mean() if mask.any() else np.nan)
+
+    print("\nBest model:", best_name)
+    print(results_df[["model", "mae", "rmse", "r2", "smape", "train_seconds", "gpu_fallback"]].to_string(index=False))
+
+    plt.style.use("seaborn-v0_8-whitegrid")
+    fig = plt.figure(figsize=(20, 12), facecolor="#f5f4ef")
+    gs = gridspec.GridSpec(3, 4, figure=fig, hspace=0.36, wspace=0.30)
+
+    # 1) Forecast window (best model)
+    ax_main = fig.add_subplot(gs[0, :])
+    sample = min(360, len(y_true_best))
+    x_axis = np.arange(sample)
+    plot_true = y_true_best[-sample:]
+    plot_pred = y_pred_best[-sample:]
+
+    ax_main.set_facecolor("#ffffff")
+    ax_main.plot(x_axis, plot_true, color="#0f4c81", linewidth=2.2, label="Observed")
+    ax_main.plot(x_axis, plot_pred, color="#ea6a47", linewidth=2.0, linestyle="--", label=f"Predicted ({best_name})")
+    ax_main.set_title("6-hour forecast window (best tree model)", fontsize=15, fontweight="bold")
+    ax_main.set_ylabel("Temperature (degC)")
+    ax_main.legend(loc="upper right", frameon=True)
+
+    # 2) Top feature importances
+    ax_fi = fig.add_subplot(gs[1, 0:2])
+    ax_fi.set_facecolor("#ffffff")
+    ax_fi.barh(top15.index, top15.values, color="#457b9d", alpha=0.92)
+    ax_fi.set_title(f"Top 15 feature importances ({best_name})", fontsize=12, fontweight="bold")
+    ax_fi.set_xlabel("Importance")
+    ax_fi.set_ylabel("Flattened lag-feature")
+
+    # 3) Model comparison table
+    ax_table = fig.add_subplot(gs[1, 2])
+    ax_table.set_facecolor("#ffffff")
+    ax_table.axis("off")
+    display_df = results_df[["model", "mae", "rmse", "r2", "smape"]].copy()
+    for c in ["mae", "rmse", "r2", "smape"]:
+        display_df[c] = display_df[c].map(lambda v: f"{v:.3f}")
+    table = ax_table.table(
+        cellText=display_df.values,
+        colLabels=display_df.columns,
+        loc="center",
+        cellLoc="center",
+    )
+    table.auto_set_font_size(False)
+    table.set_fontsize(9.8)
+    table.scale(1.20, 1.35)
+    ax_table.set_title("Model comparison", fontsize=12, fontweight="bold")
+
+    # 4) Hourly MAE
+    ax_hour = fig.add_subplot(gs[1, 3])
+    ax_hour.set_facecolor("#ffffff")
+    ax_hour.bar(np.arange(24), hourly_mae, color="#2a9d8f", alpha=0.9)
+    ax_hour.set_title("Hourly MAE profile", fontsize=12, fontweight="bold")
+    ax_hour.set_xlabel("Hour")
+    ax_hour.set_ylabel("MAE (degC)")
+    ax_hour.set_xticks(np.arange(0, 24, 3))
+
+    # 5) Residual vs humidity
+    ax_humid = fig.add_subplot(gs[2, 0:2])
+    ax_humid.set_facecolor("#ffffff")
+    ax_humid.scatter(humidity_test, resid, s=9, alpha=0.25, color="#4cc9f0")
+    if len(humidity_test) > 8:
+        z = np.polyfit(humidity_test, resid, deg=1)
+        fit_x = np.linspace(float(humidity_test.min()), float(humidity_test.max()), 100)
+        fit_y = z[0] * fit_x + z[1]
+        ax_humid.plot(fit_x, fit_y, color="#d90429", linewidth=1.8, label="Trend")
+        ax_humid.legend()
+    ax_humid.axhline(0.0, color="#555", linestyle="--", linewidth=1.0)
+    ax_humid.set_title("Residual vs humidity", fontsize=12, fontweight="bold")
+    ax_humid.set_xlabel("Humidity (%)")
+    ax_humid.set_ylabel("Residual (degC)")
+
+    # 6) Residual distribution
+    ax_res = fig.add_subplot(gs[2, 2:4])
+    ax_res.set_facecolor("#ffffff")
+    ax_res.hist(resid, bins=48, color="#f4a261", alpha=0.85, edgecolor="#1d3557")
+    ax_res.axvline(0.0, color="#264653", linestyle="--", linewidth=1.3)
+    ax_res.set_title("Residual distribution", fontsize=12, fontweight="bold")
+    ax_res.set_xlabel("Residual (degC)")
+    ax_res.set_ylabel("Count")
+
+    best_row = results_df.iloc[0]
+    fig.suptitle("Weather Tree-Ensemble Benchmark Dashboard", fontsize=18, fontweight="bold", color="#1d3557")
+    fig.text(
+        0.5,
+        0.01,
+        (
+            f"Best: {best_name} | MAE {best_row['mae']:.3f} degC | RMSE {best_row['rmse']:.3f} degC | "
+            f"R2 {best_row['r2']:.3f} | sMAPE {best_row['smape']:.2f}%"
+        ),
+        ha="center",
+        fontsize=12,
+        color="#1d3557",
+    )
+    plt.show()
