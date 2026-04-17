@@ -25,7 +25,7 @@ def ensure_dependencies():
 ensure_dependencies()
 
 import lightning.pytorch as pl
-from lightning.pytorch.callbacks import EarlyStopping, LearningRateMonitor, ModelCheckpoint
+from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
 from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
 from pytorch_forecasting.metrics import RMSE
 
@@ -182,7 +182,6 @@ def train_model(training_dataset, train_loader, val_loader, config, target_name)
     )
 
     early_stop = EarlyStopping(monitor="val_loss", min_delta=1e-4, patience=config["PATIENCE"], mode="min")
-    lr_monitor = LearningRateMonitor(logging_interval="epoch")
     checkpoint = ModelCheckpoint(
         monitor="val_loss",
         mode="min",
@@ -196,7 +195,7 @@ def train_model(training_dataset, train_loader, val_loader, config, target_name)
         accelerator="gpu" if use_cuda else "cpu",
         devices=1,
         gradient_clip_val=0.1,
-        callbacks=[early_stop, lr_monitor, checkpoint],
+        callbacks=[early_stop, checkpoint],
         logger=False,
         enable_model_summary=True,
     )
