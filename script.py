@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 STATION = "VABB"
 
 start_date = datetime(2005, 1, 1)
-end_date = datetime(2026, 4, 1)
+end_date = datetime(2016, 1, 1)
 
 delta = timedelta(days=30)
 
@@ -70,7 +70,7 @@ while current_date < end_date:
     print(f"Collected: {len(all_data) - count_before}")
 
     # SAVE PROGRESS
-    pd.DataFrame(all_data).to_csv("mumbai_metar_progress.csv", index=False)
+    pd.DataFrame(all_data).to_csv("2005-2016.csv", index=False)
 
     current_date = next_date
     iteration += 1
