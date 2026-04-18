@@ -4,3 +4,14 @@ numpy>=1.23.0
 scikit-learn>=1.2.0
 matplotlib>=3.6.0
 selenium>=4.0.0
+pandas==2.2.2
+numpy==1.26.4
+scikit-learn==1.4.2
+
+torch==2.2.2
+pytorch-lightning==2.2.1
+pytorch-forecasting==1.0.0
+
+xgboost==2.0.3
+
+matplotlib==3.8.4
