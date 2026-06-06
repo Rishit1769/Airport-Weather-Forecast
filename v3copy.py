@@ -1,33 +1,21 @@
-import importlib
-import subprocess
-import sys
 import warnings
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from pytorch_forecasting.data import GroupNormalizer
 
-
-def ensure_dependencies():
-    dependencies = {
-        "lightning": "lightning>=2.1.0",
-        "pytorch_forecasting": "pytorch-forecasting>=1.0.0",
-    }
-    for module_name, pip_name in dependencies.items():
-        try:
-            importlib.import_module(module_name)
-        except ImportError:
-            print(f"Installing missing dependency: {pip_name}")
-            subprocess.check_call([sys.executable, "-m", "pip", "install", pip_name])
-
-
-ensure_dependencies()
-
-import lightning.pytorch as pl
-from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
-from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
-from pytorch_forecasting.metrics import RMSE
+try:
+    import lightning.pytorch as pl
+    from lightning.pytorch.callbacks import EarlyStopping, ModelCheckpoint
+    from pytorch_forecasting import TemporalFusionTransformer, TimeSeriesDataSet
+    from pytorch_forecasting.metrics import RMSE
+except ImportError as exc:
+    raise ImportError(
+        "Missing training dependencies. Install from requirements.txt before running v3copy.py."
+    ) from exc
 
 
 CONFIG = {
@@ -38,8 +26,8 @@ CONFIG = {
     "TRAIN_RATIO": 0.70,
     "VAL_RATIO": 0.15,
     "BATCH_SIZE": 128,
-    "MAX_EPOCHS": 40,
-    "PATIENCE": 8,
+    "MAX_EPOCHS": 100,
+    "PATIENCE": 10,
     "LEARNING_RATE": 3e-4,
     "HIDDEN_SIZE": 64,
     "ATTN_HEADS": 4,
@@ -51,7 +39,37 @@ CONFIG = {
 
 TARGETS = ["temp", "pressure", "wind_speed", "visibility"]
 TIME_FEATURES = ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "doy_sin", "doy_cos", "is_weekend"]
-OBSERVED_FEATURES = ["humidity", "wind_u", "wind_v", "temp_trend", "dewpoint_approx"]
+OBSERVED_FEATURES = [
+    "humidity",
+    "wind_u",
+    "wind_v",
+    "temp_trend",
+    "dewpoint_approx",
+
+    "is_rain",
+    "is_fog",
+    "is_haze",
+
+    "dewpoint_spread",
+
+    "pressure_trend_6",
+    "pressure_trend_24",
+
+    "vis_trend_6",
+
+    "humidity_trend_6",
+
+    "wind_acceleration",
+
+    "is_monsoon",
+
+    "rain_last_3h",
+    "rain_last_6h",
+
+    "fog_last_3h",
+
+    "haze_last_3h"
+]
 
 
 def set_seed(seed):
@@ -96,6 +114,40 @@ def load_data(csv_file):
     temp_mean_24 = df["temp"].rolling(24, min_periods=1).mean()
     df["temp_trend"] = temp_mean_6 - temp_mean_24
 
+    # Weather event indicators
+    for col in ["is_rain", "is_fog", "is_haze"]:
+        if col not in df.columns:
+            df[col] = 0.0
+
+    # Monsoon flag
+    month = df["datetime"].dt.month
+    df["is_monsoon"] = month.isin([6, 7, 8, 9]).astype(float)
+
+    # Dew point spread
+    if "dew_point" in df.columns:
+        df["dewpoint_spread"] = df["temp"] - df["dew_point"]
+    else:
+        df["dewpoint_spread"] = df["temp"] - df["dewpoint_approx"]
+
+    # Pressure trends
+    df["pressure_trend_6"] = df["pressure"] - df["pressure"].shift(6)
+    df["pressure_trend_24"] = df["pressure"] - df["pressure"].shift(24)
+
+    # Visibility trend
+    df["vis_trend_6"] = df["visibility"] - df["visibility"].shift(6)
+
+    # Humidity trend
+    df["humidity_trend_6"] = df["humidity"] - df["humidity"].shift(6)
+
+    # Wind acceleration
+    df["wind_acceleration"] = df["wind_speed"] - df["wind_speed"].shift(1)
+
+    # Event persistence
+    df["rain_last_3h"] = df["is_rain"].rolling(6, min_periods=1).sum()
+    df["rain_last_6h"] = df["is_rain"].rolling(12, min_periods=1).sum()
+    df["fog_last_3h"] = df["is_fog"].rolling(6, min_periods=1).sum()
+    df["haze_last_3h"] = df["is_haze"].rolling(6, min_periods=1).sum()
+
     feature_cols = list(dict.fromkeys(TARGETS + TIME_FEATURES + OBSERVED_FEATURES))
     for col in feature_cols:
         if col not in df.columns:
@@ -129,7 +181,9 @@ def create_dataset(df, target_name, config):
         max_encoder_length=config["ENCODER_LENGTH"],
         min_prediction_length=config["PREDICTION_LENGTH"],
         max_prediction_length=config["PREDICTION_LENGTH"],
-        target_normalizer=None,
+        target_normalizer=GroupNormalizer(
+            groups=["group_id"]
+        ),
         allow_missing_timesteps=False,
         add_relative_time_idx=True,
         add_target_scales=False,
@@ -230,9 +284,14 @@ def evaluate_model(model, test_loader):
 
 def main():
     warnings.filterwarnings("ignore")
+    torch.set_float32_matmul_precision("high")
     set_seed(CONFIG["SEED"])
 
-    df = load_data(CONFIG["CSV_FILE"])
+    csv_path = Path(CONFIG["CSV_FILE"])
+    if not csv_path.exists():
+        raise FileNotFoundError(f"Data file not found: {csv_path}")
+
+    df = load_data(str(csv_path))
     print(
         "Data loaded | rows={} | range={} -> {}".format(
             len(df),

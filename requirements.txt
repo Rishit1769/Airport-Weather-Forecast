@@ -1,17 +1,13 @@
-torch>=2.0.0
-pandas>=1.5.0
-numpy>=1.23.0
-scikit-learn>=1.2.0
-matplotlib>=3.6.0
+numpy>=1.26.0
+pandas>=2.2.0
+scikit-learn>=1.4.0
+matplotlib>=3.8.0
 selenium>=4.0.0
-pandas==2.2.2
-numpy==1.26.4
-scikit-learn==1.4.2
 
-torch==2.2.2
-pytorch-lightning==2.2.1
-pytorch-forecasting==1.0.0
+torch==2.11.0
+torchvision==0.26.0
+lightning>=2.6.0
+pytorch-forecasting>=1.7.0
 
-xgboost==2.0.3
-
-matplotlib==3.8.4
+xgboost>=2.0.3
+lightgbm>=4.5.0
