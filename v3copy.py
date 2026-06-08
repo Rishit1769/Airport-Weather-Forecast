@@ -266,19 +266,31 @@ def train_model(training_dataset, train_loader, val_loader, config, target_name)
 
 
 def evaluate_model(model, test_loader):
-    predictions, x = model.predict(test_loader, mode="prediction", return_x=True)
 
-    y_pred = predictions.detach().cpu().numpy().reshape(-1)
-    y_true = x["decoder_target"].detach().cpu().numpy().reshape(-1)
+    result = model.predict(
+        test_loader,
+        mode="prediction",
+        return_x=True
+    )
+
+    y_pred = result.output.detach().cpu().numpy().reshape(-1)
+
+    y_true = (
+        result.x["decoder_target"]
+        .detach()
+        .cpu()
+        .numpy()
+        .reshape(-1)
+    )
 
     mae = float(mean_absolute_error(y_true, y_pred))
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
-    r2 = float(r2_score(y_true, y_pred)) if len(y_true) > 1 else float("nan")
+    r2 = float(r2_score(y_true, y_pred))
 
     return {
         "MAE": mae,
         "RMSE": rmse,
-        "R2": r2,
+        "R2": r2
     }
 
 

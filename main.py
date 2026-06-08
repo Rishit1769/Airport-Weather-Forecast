@@ -213,7 +213,7 @@ def visibility_distribution(df: pd.DataFrame) -> Dict[str, int]:
 
 @timed_step("load_and_clean")
 def load_and_clean(input_csv: str) -> pd.DataFrame:
-    raw_df = pd.read_csv(input_csv)
+    raw_df = pd.read_csv("clean_weather_data.csv")
     raw_rows = len(raw_df)
     df = _ensure_datetime_index(raw_df)
     cleaned_rows = len(df)
@@ -549,6 +549,8 @@ def evaluate(y_df: pd.DataFrame, preds: Dict[str, np.ndarray]) -> Dict[str, obje
     metrics: Dict[str, object] = {}
     for target_col in TARGET_COLUMNS:
         y_true = y_df[target_col].to_numpy(dtype=np.float64)
+        print("Prediction shape:", result.output.shape)
+        print("Target shape:", result.x["decoder_target"].shape)
         y_pred = preds[target_col]
         metrics[target_col] = {
             "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
