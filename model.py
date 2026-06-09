@@ -148,30 +148,47 @@ def smape(y_true, y_pred):
     return float(np.mean(num / den) * 100.0)
 
 
-def evaluate_model(name, model, x_train, y_train, x_test, y_test, scaler, feature_count):
-    start = time.time()
-    model.fit(x_train, y_train)
-    preds_scaled = model.predict(x_test)
-    train_seconds = time.time() - start
+def evaluate_model(model, test_loader):
 
-    y_pred = inverse_temp_scale(scaler, feature_count, preds_scaled)
-    y_true = inverse_temp_scale(scaler, feature_count, y_test)
+    result = model.predict(
+        test_loader,
+        mode="prediction",
+        return_x=True
+    )
 
-    metrics = {
-        "model": name,
-        "mae": float(mean_absolute_error(y_true, y_pred)),
-        "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
-        "r2": float(r2_score(y_true, y_pred)),
-        "smape": smape(y_true, y_pred),
-        "train_seconds": train_seconds,
-    }
+    y_pred = result.output.detach().cpu().numpy().reshape(-1)
 
-    if hasattr(model, "feature_importances_"):
-        importances = np.asarray(model.feature_importances_, dtype=np.float64)
-    else:
-        importances = np.zeros(x_train.shape[1], dtype=np.float64)
+    y_true = (
+        result.x["decoder_target"]
+        .detach()
+        .cpu()
+        .numpy()
+        .reshape(-1)
+    )
 
-    return metrics, y_true, y_pred, importances
+    print("\n" + "="*60)
+    print("DEBUG")
+
+    print("y_pred shape:", y_pred.shape)
+    print("y_true shape:", y_true.shape)
+
+    print("\nFirst 50 Predictions:")
+    print(y_pred[:50])
+
+    print("\nFirst 50 Actual Values:")
+    print(y_true[:50])
+
+    print("\nPrediction Mean:", np.mean(y_pred))
+    print("Prediction Std :", np.std(y_pred))
+
+    print("\nActual Mean:", np.mean(y_true))
+    print("Actual Std :", np.std(y_true))
+
+    print("="*60)
+
+    mae = float(mean_absolute_error(y_true, y_pred))
+    rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+    r2 = float(r2_score(y_true, y_pred))
 
 
 def build_models(seed):

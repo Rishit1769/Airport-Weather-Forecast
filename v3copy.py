@@ -37,7 +37,7 @@ CONFIG = {
     "USE_CUDA_IF_AVAILABLE": True,
 }
 
-TARGETS = ["temp", "pressure", "wind_speed", "visibility"]
+TARGETS = ["temp"]
 TIME_FEATURES = ["hour_sin", "hour_cos", "dow_sin", "dow_cos", "doy_sin", "doy_cos", "is_weekend"]
 OBSERVED_FEATURES = [
     "humidity",
@@ -282,10 +282,24 @@ def evaluate_model(model, test_loader):
         .numpy()
         .reshape(-1)
     )
+    print("y_pred shape:", y_pred.shape)
+    print("y_true shape:", y_true.shape)
+
+    print("\nFirst 20 predictions:")
+    print(y_pred[:20])
+
+    print("\nFirst 20 actuals:")
+    print(y_true[:20])
 
     mae = float(mean_absolute_error(y_true, y_pred))
     rmse = float(np.sqrt(mean_squared_error(y_true, y_pred)))
     r2 = float(r2_score(y_true, y_pred))
+
+    print("\nPrediction Mean:", np.mean(y_pred))
+    print("Prediction Std :", np.std(y_pred))
+
+    print("\nActual Mean:", np.mean(y_true))
+    print("Actual Std :", np.std(y_true))
 
     return {
         "MAE": mae,
