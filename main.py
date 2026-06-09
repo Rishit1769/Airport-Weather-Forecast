@@ -438,7 +438,7 @@ def split_chronological(df: pd.DataFrame) -> DataSplits:
         raise ValueError("Chronological split generated empty partition(s).")
     return DataSplits(train=train, val=val, test=test)
 
-
+# created function
 def get_feature_columns(df: pd.DataFrame, missing_reference_df: pd.DataFrame = None) -> List[str]:
     cols = [c for c in df.columns if not c.endswith("_target")]
     numeric_cols = [c for c in cols if pd.api.types.is_numeric_dtype(df[c])]
