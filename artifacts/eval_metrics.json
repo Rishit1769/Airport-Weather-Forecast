@@ -1,0 +1,366 @@
+{
+  "final_stage": "+PhysicsSignals",
+  "final_metrics": {
+    "temp_target": {
+      "rmse": 1.0788647086882748,
+      "mae": 0.7998087185551811,
+      "r2": 0.8235031879292651
+    },
+    "wind_dir_sin_target": {
+      "rmse": 0.4275307034099353,
+      "mae": 0.30824359205509366,
+      "r2": 0.6205956992128823
+    },
+    "wind_dir_cos_target": {
+      "rmse": 0.5233704217656314,
+      "mae": 0.406767538487924,
+      "r2": 0.3786116791387837
+    },
+    "wind_speed_target": {
+      "rmse": 2.4966303642444894,
+      "mae": 1.9598357737741947,
+      "r2": 0.6089074760022763
+    },
+    "wind_gust_target": {
+      "rmse": 3.612437424146348,
+      "mae": 2.828806239303039,
+      "r2": 0.5836242843926002
+    },
+    "pressure_target": {
+      "rmse": 0.7640453365991898,
+      "mae": 0.566274808971256,
+      "r2": 0.9633780090309852
+    },
+    "visibility_target": {
+      "rmse": 484.4178555597068,
+      "mae": 336.7119247579455,
+      "r2": 0.4283233403192459
+    },
+    "wind_dir_summary": {
+      "circular_mae_deg": 34.962113952032965,
+      "circular_rmse_deg": 51.99986854504913
+    },
+    "visibility_summary": {
+      "overall_r2": 0.4283233403192459,
+      "low_visibility_r2": 0.33605468402482097,
+      "severe_visibility_r2": -144.65678634112183,
+      "visibility_mae": 336.7119247579455,
+      "low_visibility_mae": 326.4635989950811,
+      "severe_visibility_mae": 1746.2675951580668,
+      "low_visibility_count": 17185,
+      "severe_visibility_count": 43
+    },
+    "operational_metrics": {
+      "temp": {
+        "r2": 0.8235031879292651
+      },
+      "wind_dir": {
+        "r2": 0.3786116791387837,
+        "component_r2_mean": 0.499603689175833,
+        "circular_mae_deg": 34.962113952032965
+      },
+      "wind_speed": {
+        "r2": 0.6089074760022763
+      },
+      "wind_gust": {
+        "r2": 0.5836242843926002
+      },
+      "pressure": {
+        "r2": 0.9633780090309852
+      },
+      "visibility": {
+        "r2": 0.4283233403192459
+      }
+    }
+  },
+  "gate_passed": false,
+  "comparison_rows": [
+    {
+      "stage": "Baseline",
+      "target": "temp_target",
+      "rmse": 1.0911678215262233,
+      "mae": 0.8090651357231115,
+      "r2": 0.8194547811532719
+    },
+    {
+      "stage": "Baseline",
+      "target": "wind_dir_sin_target",
+      "rmse": 0.4280254140024256,
+      "mae": 0.3099516134004218,
+      "r2": 0.6197171474769665
+    },
+    {
+      "stage": "Baseline",
+      "target": "wind_dir_cos_target",
+      "rmse": 0.5217345208679094,
+      "mae": 0.40382411966342047,
+      "r2": 0.3824901597878544
+    },
+    {
+      "stage": "Baseline",
+      "target": "wind_speed_target",
+      "rmse": 2.4904091047612447,
+      "mae": 1.9496658855070088,
+      "r2": 0.6108541451192844
+    },
+    {
+      "stage": "Baseline",
+      "target": "wind_gust_target",
+      "rmse": 3.523382555247699,
+      "mae": 2.7566551837992703,
+      "r2": 0.6039004710377356
+    },
+    {
+      "stage": "Baseline",
+      "target": "pressure_target",
+      "rmse": 0.7632581449470089,
+      "mae": 0.5637652175132886,
+      "r2": 0.9634534330228931
+    },
+    {
+      "stage": "Baseline",
+      "target": "visibility_target",
+      "rmse": 487.36081670812166,
+      "mae": 339.41407403211656,
+      "r2": 0.42135607951335763
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "target": "temp_target",
+      "rmse": 1.0788647086882748,
+      "mae": 0.7998087185551811,
+      "r2": 0.8235031879292651
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "target": "wind_dir_sin_target",
+      "rmse": 0.4275307034099353,
+      "mae": 0.30824359205509366,
+      "r2": 0.6205956992128823
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "target": "wind_dir_cos_target",
+      "rmse": 0.5233704217656314,
+      "mae": 0.406767538487924,
+      "r2": 0.3786116791387837
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "target": "wind_speed_target",
+      "rmse": 2.4966303642444894,
+      "mae": 1.9598357737741947,
+      "r2": 0.6089074760022763
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "target": "wind_gust_target",
+      "rmse": 3.612437424146348,
+      "mae": 2.828806239303039,
+      "r2": 0.5836242843926002
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "target": "pressure_target",
+      "rmse": 0.7640453365991898,
+      "mae": 0.566274808971256,
+      "r2": 0.9633780090309852
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "target": "visibility_target",
+      "rmse": 484.4178555597068,
+      "mae": 336.7119247579455,
+      "r2": 0.4283233403192459
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "target": "temp_target",
+      "rmse": 1.0688507152779128,
+      "mae": 0.7959050235613203,
+      "r2": 0.8267644592325304
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "target": "wind_dir_sin_target",
+      "rmse": 0.42750186987831756,
+      "mae": 0.308441410071896,
+      "r2": 0.620646873067402
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "target": "wind_dir_cos_target",
+      "rmse": 0.5239829998639479,
+      "mae": 0.40946405840486966,
+      "r2": 0.37715622187557984
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "target": "wind_speed_target",
+      "rmse": 2.5106688941374657,
+      "mae": 1.9775087156288664,
+      "r2": 0.6044968909980645
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "target": "wind_gust_target",
+      "rmse": 3.509050244603722,
+      "mae": 2.750956365777793,
+      "r2": 0.6071164006148884
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "target": "pressure_target",
+      "rmse": 0.7612752191807665,
+      "mae": 0.5626865637092686,
+      "r2": 0.9636430805053438
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "target": "visibility_target",
+      "rmse": 495.33132802536636,
+      "mae": 354.971678153603,
+      "r2": 0.40227452102130945
+    }
+  ],
+  "comparison_table": "| Stage | Target | RMSE | MAE | R2 |\n|---|---|---:|---:|---:|\n| Baseline | temp_target | 1.0912 | 0.8091 | 0.8195 |\n| Baseline | wind_dir_sin_target | 0.4280 | 0.3100 | 0.6197 |\n| Baseline | wind_dir_cos_target | 0.5217 | 0.4038 | 0.3825 |\n| Baseline | wind_speed_target | 2.4904 | 1.9497 | 0.6109 |\n| Baseline | wind_gust_target | 3.5234 | 2.7567 | 0.6039 |\n| Baseline | pressure_target | 0.7633 | 0.5638 | 0.9635 |\n| Baseline | visibility_target | 487.3608 | 339.4141 | 0.4214 |\n| +PhysicsSignals | temp_target | 1.0789 | 0.7998 | 0.8235 |\n| +PhysicsSignals | wind_dir_sin_target | 0.4275 | 0.3082 | 0.6206 |\n| +PhysicsSignals | wind_dir_cos_target | 0.5234 | 0.4068 | 0.3786 |\n| +PhysicsSignals | wind_speed_target | 2.4966 | 1.9598 | 0.6089 |\n| +PhysicsSignals | wind_gust_target | 3.6124 | 2.8288 | 0.5836 |\n| +PhysicsSignals | pressure_target | 0.7640 | 0.5663 | 0.9634 |\n| +PhysicsSignals | visibility_target | 484.4179 | 336.7119 | 0.4283 |\n| +EventProbAndWeightedVis | temp_target | 1.0689 | 0.7959 | 0.8268 |\n| +EventProbAndWeightedVis | wind_dir_sin_target | 0.4275 | 0.3084 | 0.6206 |\n| +EventProbAndWeightedVis | wind_dir_cos_target | 0.5240 | 0.4095 | 0.3772 |\n| +EventProbAndWeightedVis | wind_speed_target | 2.5107 | 1.9775 | 0.6045 |\n| +EventProbAndWeightedVis | wind_gust_target | 3.5091 | 2.7510 | 0.6071 |\n| +EventProbAndWeightedVis | pressure_target | 0.7613 | 0.5627 | 0.9636 |\n| +EventProbAndWeightedVis | visibility_target | 495.3313 | 354.9717 | 0.4023 |",
+  "low_visibility_rows": [
+    {
+      "stage": "Baseline",
+      "overall_r2": 0.42135607951335763,
+      "low_visibility_r2": 0.3254628873678044,
+      "severe_visibility_r2": -148.97671751778464,
+      "visibility_mae": 339.41407403211656,
+      "low_visibility_mae": 329.472943251973,
+      "severe_visibility_mae": 1775.247737440952,
+      "low_visibility_count": 17185,
+      "severe_visibility_count": 43
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "overall_r2": 0.4283233403192459,
+      "low_visibility_r2": 0.33605468402482097,
+      "severe_visibility_r2": -144.65678634112183,
+      "visibility_mae": 336.7119247579455,
+      "low_visibility_mae": 326.4635989950811,
+      "severe_visibility_mae": 1746.2675951580668,
+      "low_visibility_count": 17185,
+      "severe_visibility_count": 43
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "overall_r2": 0.40227452102130945,
+      "low_visibility_r2": 0.3340227286368589,
+      "severe_visibility_r2": -116.01925371002163,
+      "visibility_mae": 354.971678153603,
+      "low_visibility_mae": 341.185308005028,
+      "severe_visibility_mae": 1574.9839037518168,
+      "low_visibility_count": 17185,
+      "severe_visibility_count": 43
+    }
+  ],
+  "low_visibility_table": "| Stage | Overall R2 | Low Vis R2 | Severe Vis R2 | Visibility MAE |\n|---|---:|---:|---:|---:|\n| Baseline | 0.4214 | 0.3255 | -148.9767 | 339.4141 |\n| +PhysicsSignals | 0.4283 | 0.3361 | -144.6568 | 336.7119 |\n| +EventProbAndWeightedVis | 0.4023 | 0.3340 | -116.0193 | 354.9717 |",
+  "segment_rows": [
+    {
+      "stage": "Baseline",
+      "segment": "severe",
+      "count": 43,
+      "rmse": 1812.134957358785,
+      "mae": 1775.247737440952,
+      "r2": -148.97671751778464
+    },
+    {
+      "stage": "Baseline",
+      "segment": "moderate",
+      "count": 7347,
+      "rmse": 467.80581388162403,
+      "mae": 315.37152934512494,
+      "r2": -1.7129568698435573
+    },
+    {
+      "stage": "Baseline",
+      "segment": "clear",
+      "count": 10118,
+      "rmse": 487.99291355386237,
+      "mae": 350.7700463872013,
+      "r2": 0.06938576645226724
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "segment": "severe",
+      "count": 43,
+      "rmse": 1785.8458879297343,
+      "mae": 1746.2675951580668,
+      "r2": -144.65678634112183
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "segment": "moderate",
+      "count": 7347,
+      "rmse": 464.0333469496408,
+      "mae": 311.2490055930035,
+      "r2": -1.6693777896914446
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "segment": "clear",
+      "count": 10118,
+      "rmse": 485.94539918821175,
+      "mae": 349.2109535460087,
+      "r2": 0.07717870170345109
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "segment": "severe",
+      "count": 43,
+      "rmse": 1600.6901713264115,
+      "mae": 1574.9839037518168,
+      "r2": -116.01925371002163
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "segment": "moderate",
+      "count": 7347,
+      "rmse": 350.71214702248847,
+      "mae": 223.43711870265392,
+      "r2": -0.5248013780114953
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "segment": "clear",
+      "count": 10118,
+      "rmse": 569.5191173409718,
+      "mae": 445.2982132974456,
+      "r2": -0.26753299611180603
+    }
+  ],
+  "segment_table": "| Stage | Segment | Count | RMSE | MAE | R2 |\n|---|---|---:|---:|---:|---:|\n| Baseline | severe | 43 | 1812.1350 | 1775.2477 | -148.9767 |\n| Baseline | moderate | 7347 | 467.8058 | 315.3715 | -1.7130 |\n| Baseline | clear | 10118 | 487.9929 | 350.7700 | 0.0694 |\n| +PhysicsSignals | severe | 43 | 1785.8459 | 1746.2676 | -144.6568 |\n| +PhysicsSignals | moderate | 7347 | 464.0333 | 311.2490 | -1.6694 |\n| +PhysicsSignals | clear | 10118 | 485.9454 | 349.2110 | 0.0772 |\n| +EventProbAndWeightedVis | severe | 43 | 1600.6902 | 1574.9839 | -116.0193 |\n| +EventProbAndWeightedVis | moderate | 7347 | 350.7121 | 223.4371 | -0.5248 |\n| +EventProbAndWeightedVis | clear | 10118 | 569.5191 | 445.2982 | -0.2675 |",
+  "before_after_comparison": {
+    "baseline": {
+      "overall_r2": 0.42135607951335763,
+      "low_visibility_r2": 0.3254628873678044,
+      "severe_visibility_r2": -148.97671751778464,
+      "visibility_mae": 339.41407403211656,
+      "low_visibility_mae": 329.472943251973,
+      "severe_visibility_mae": 1775.247737440952,
+      "low_visibility_count": 17185,
+      "severe_visibility_count": 43
+    },
+    "final": {
+      "overall_r2": 0.4283233403192459,
+      "low_visibility_r2": 0.33605468402482097,
+      "severe_visibility_r2": -144.65678634112183,
+      "visibility_mae": 336.7119247579455,
+      "low_visibility_mae": 326.4635989950811,
+      "severe_visibility_mae": 1746.2675951580668,
+      "low_visibility_count": 17185,
+      "severe_visibility_count": 43
+    },
+    "delta": {
+      "overall_r2": 0.006967260805888276,
+      "low_visibility_r2": 0.010591796657016594,
+      "severe_visibility_r2": 4.319931176662806,
+      "visibility_mae": -2.702149274171063
+    }
+  }
+}

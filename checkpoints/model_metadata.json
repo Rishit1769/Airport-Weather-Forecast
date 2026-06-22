@@ -1,0 +1,195 @@
+{
+  "trained_at_utc": "2026-06-22 17:49:44 UTC",
+  "data_range": {
+    "start": "2016-01-01T00:00:00",
+    "end": "2025-12-31T23:30:00"
+  },
+  "split_boundaries": {
+    "train_start": "2016-01-01",
+    "train_end": "2024-01-01",
+    "validation_end": "2025-01-01",
+    "test_end": "2026-01-01"
+  },
+  "selected_stage": "+PhysicsSignals",
+  "stage_config": {
+    "name": "+PhysicsSignals",
+    "add_enhanced_signals": true,
+    "add_event_probability_feature": false,
+    "use_visibility_weighting": false,
+    "reg_params": {
+      "gamma": 0.0,
+      "reg_alpha": 0.0,
+      "reg_lambda": 1.0
+    }
+  },
+  "target_columns": [
+    "temp_target",
+    "wind_dir_sin_target",
+    "wind_dir_cos_target",
+    "wind_speed_target",
+    "wind_gust_target",
+    "pressure_target",
+    "visibility_target"
+  ],
+  "operational_targets": [
+    "temp",
+    "wind_dir",
+    "wind_speed",
+    "wind_gust",
+    "pressure",
+    "visibility"
+  ],
+  "event_feature_columns": [],
+  "validation_metrics": {
+    "temp_target": {
+      "rmse": 1.0545494686901156,
+      "mae": 0.7632841812022614,
+      "r2": 0.8303402501661268
+    },
+    "wind_dir_sin_target": {
+      "rmse": 0.4209634565735028,
+      "mae": 0.31035267684069573,
+      "r2": 0.5952929502779941
+    },
+    "wind_dir_cos_target": {
+      "rmse": 0.49283218148877717,
+      "mae": 0.3963720022946817,
+      "r2": 0.4998570585586001
+    },
+    "wind_speed_target": {
+      "rmse": 2.272472697342136,
+      "mae": 1.8080080654503323,
+      "r2": 0.5785266383740987
+    },
+    "wind_gust_target": {
+      "rmse": 3.3081527110150746,
+      "mae": 2.614843193377173,
+      "r2": 0.5448507911528873
+    },
+    "pressure_target": {
+      "rmse": 0.7444079723213622,
+      "mae": 0.5951690326405787,
+      "r2": 0.9666277623448759
+    },
+    "visibility_target": {
+      "rmse": 440.3497890676935,
+      "mae": 313.2123059583709,
+      "r2": 0.4966105121513885
+    },
+    "wind_dir_summary": {
+      "circular_mae_deg": 32.817156985141104,
+      "circular_rmse_deg": 48.40026703209676
+    },
+    "visibility_summary": {
+      "overall_r2": 0.4966105121513885,
+      "low_visibility_r2": 0.45107411632173844,
+      "severe_visibility_r2": -98.67590355664792,
+      "visibility_mae": 313.2123059583709,
+      "low_visibility_mae": 308.4920830319407,
+      "severe_visibility_mae": 1580.243378795277,
+      "low_visibility_count": 17424,
+      "severe_visibility_count": 110
+    },
+    "operational_metrics": {
+      "temp": {
+        "r2": 0.8303402501661268
+      },
+      "wind_dir": {
+        "r2": 0.4998570585586001,
+        "component_r2_mean": 0.5475750044182971,
+        "circular_mae_deg": 32.817156985141104
+      },
+      "wind_speed": {
+        "r2": 0.5785266383740987
+      },
+      "wind_gust": {
+        "r2": 0.5448507911528873
+      },
+      "pressure": {
+        "r2": 0.9666277623448759
+      },
+      "visibility": {
+        "r2": 0.4966105121513885
+      }
+    }
+  },
+  "test_metrics": {
+    "temp_target": {
+      "rmse": 1.0788647086882748,
+      "mae": 0.7998087185551811,
+      "r2": 0.8235031879292651
+    },
+    "wind_dir_sin_target": {
+      "rmse": 0.4275307034099353,
+      "mae": 0.30824359205509366,
+      "r2": 0.6205956992128823
+    },
+    "wind_dir_cos_target": {
+      "rmse": 0.5233704217656314,
+      "mae": 0.406767538487924,
+      "r2": 0.3786116791387837
+    },
+    "wind_speed_target": {
+      "rmse": 2.4966303642444894,
+      "mae": 1.9598357737741947,
+      "r2": 0.6089074760022763
+    },
+    "wind_gust_target": {
+      "rmse": 3.612437424146348,
+      "mae": 2.828806239303039,
+      "r2": 0.5836242843926002
+    },
+    "pressure_target": {
+      "rmse": 0.7640453365991898,
+      "mae": 0.566274808971256,
+      "r2": 0.9633780090309852
+    },
+    "visibility_target": {
+      "rmse": 484.4178555597068,
+      "mae": 336.7119247579455,
+      "r2": 0.4283233403192459
+    },
+    "wind_dir_summary": {
+      "circular_mae_deg": 34.962113952032965,
+      "circular_rmse_deg": 51.99986854504913
+    },
+    "visibility_summary": {
+      "overall_r2": 0.4283233403192459,
+      "low_visibility_r2": 0.33605468402482097,
+      "severe_visibility_r2": -144.65678634112183,
+      "visibility_mae": 336.7119247579455,
+      "low_visibility_mae": 326.4635989950811,
+      "severe_visibility_mae": 1746.2675951580668,
+      "low_visibility_count": 17185,
+      "severe_visibility_count": 43
+    },
+    "operational_metrics": {
+      "temp": {
+        "r2": 0.8235031879292651
+      },
+      "wind_dir": {
+        "r2": 0.3786116791387837,
+        "component_r2_mean": 0.499603689175833,
+        "circular_mae_deg": 34.962113952032965
+      },
+      "wind_speed": {
+        "r2": 0.6089074760022763
+      },
+      "wind_gust": {
+        "r2": 0.5836242843926002
+      },
+      "pressure": {
+        "r2": 0.9633780090309852
+      },
+      "visibility": {
+        "r2": 0.4283233403192459
+      }
+    }
+  },
+  "gate_threshold_r2": 0.9,
+  "gate_passed": false,
+  "forecast_method": "Last 12 half-hour feature rows, each predicting its timestamp plus 6 hours.",
+  "wind_gust_source": "proxy",
+  "wind_gust_observed_coverage": 0.0,
+  "wind_speed_percentile_threshold": 18.0
+}

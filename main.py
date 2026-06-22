@@ -339,6 +339,15 @@ def visibility_distribution(df: pd.DataFrame) -> Dict[str, int]:
 @timed_step("load_and_clean")
 def load_and_clean(input_csv: str) -> pd.DataFrame:
     raw_df = pd.read_csv(input_csv)
+    if "dew_point" not in raw_df.columns:
+        if "td" in raw_df.columns:
+            raw_df["dew_point"] = raw_df["td"]
+        else:
+            temp = pd.to_numeric(raw_df["temp"], errors="coerce")
+            humidity = pd.to_numeric(raw_df["humidity"], errors="coerce").clip(0.1, 100.0)
+            b, c = 17.62, 243.12
+            gamma = (b * temp / (c + temp)) + np.log(humidity / 100.0)
+            raw_df["dew_point"] = (c * gamma) / (b - gamma)
     raw_gust_coverage = (
         float(pd.to_numeric(raw_df["wind_gust"], errors="coerce").notna().mean())
         if "wind_gust" in raw_df.columns
@@ -425,6 +434,15 @@ def add_features(
 ) -> pd.DataFrame:
     df = _ensure_datetime_index(df).copy()
 
+    if "dew_point" not in df.columns:
+        if "td" in df.columns:
+            df["dew_point"] = pd.to_numeric(df["td"], errors="coerce")
+        else:
+            humidity_for_dew = pd.to_numeric(df["humidity"], errors="coerce").clip(0.1, 100.0)
+            b, c = 17.62, 243.12
+            gamma = (b * df["temp"] / (c + df["temp"])) + np.log(humidity_for_dew / 100.0)
+            df["dew_point"] = (c * gamma) / (b - gamma)
+
     df["wind_dir_sin"] = np.sin(np.radians(df["wind_dir"]))
     df["wind_dir_cos"] = np.cos(np.radians(df["wind_dir"]))
     df["hour_sin"] = np.sin(2 * np.pi * df.index.hour / 24.0)
@@ -464,6 +482,20 @@ def add_features(
     df["temp_humidity"] = (df["temp"] * df["humidity"]).clip(-1000.0, 6000.0)
     df["humidity_temperature"] = (df["humidity"] * df["temp"]).clip(-1000.0, 6000.0)
 
+    df["dew_point_depression"] = df["temp"] - df["dew_point"]
+    humidity_for_wet_bulb = df["humidity"].clip(5.0, 99.0)
+    df["wet_bulb"] = (
+        df["temp"] * np.arctan(0.151977 * np.sqrt(humidity_for_wet_bulb + 8.313659))
+        + np.arctan(df["temp"] + humidity_for_wet_bulb)
+        - np.arctan(humidity_for_wet_bulb - 1.676331)
+        + 0.00391838
+        * humidity_for_wet_bulb ** 1.5
+        * np.arctan(0.023101 * humidity_for_wet_bulb)
+        - 4.686035
+    )
+    df["pressure_tendency_3h"] = df["pressure"].diff(6)
+    df["pressure_tendency_sign"] = np.sign(df["pressure_tendency_3h"])
+
     vis_trend = df["visibility"] - df["visibility"].shift(1)
     df["visibility_trend"] = vis_trend.clip(-5000.0, 5000.0).astype("float32")
     vis_acc = vis_trend - vis_trend.shift(1)
@@ -479,6 +511,11 @@ def add_features(
             new_cols[f"{col}_rolling_mean_{window}"] = df[col].rolling(window).mean()
         for window in ROLLING_STD_WINDOWS:
             new_cols[f"{col}_rolling_std_{window}"] = df[col].rolling(window).std()
+
+    for step in [1, 2, 3, 6]:
+        new_cols[f"dew_point_depression_lag_{step}"] = df["dew_point_depression"].shift(step)
+    for step in [1, 2]:
+        new_cols[f"wet_bulb_lag_{step}"] = df["wet_bulb"].shift(step)
 
     # Explicit visibility history features
     new_cols["visibility_lag_1"] = df["visibility"].shift(1)
@@ -611,8 +648,10 @@ def build_visibility_sample_weights(y_train: pd.Series) -> Tuple[np.ndarray, Dic
     weights = np.ones_like(y_arr, dtype=np.float64)
     low_mask = (y_arr >= 1000.0) & (y_arr < 3000.0)
     severe_mask = y_arr < 1000.0
-    weights[low_mask] = 6.0
-    weights[severe_mask] = 15.0
+    weights[low_mask] = 5.0
+    weights[severe_mask] = 5.0
+    weights[y_arr > 5000.0] = 1.0
+    weights = np.clip(weights, 1.0, 5.0)
     stats = {
         "moderate_low_count": int(low_mask.sum()),
         "low_visibility_count": int(low_mask.sum()),
@@ -635,6 +674,12 @@ def train_model(
     sample_weight_train: np.ndarray = None,
 ):
     xgb = import_xgboost()
+    if sample_weight_train is not None:
+        sample_weight_train = np.clip(
+            np.asarray(sample_weight_train, dtype=np.float64),
+            1.0,
+            5.0,
+        )
 
     model = xgb.XGBRegressor(
         objective="reg:squarederror",
@@ -904,7 +949,12 @@ def attach_event_probability_features(
     updated_test = split.test.copy()
 
     for part in [updated_train, updated_val, updated_test]:
-        part["low_visibility_event_prob"] = event_clf.predict_proba(part[base_feature_cols])[:, 1].astype("float32")
+        event_prob_feature = np.clip(
+            event_clf.predict_proba(part[base_feature_cols])[:, 1],
+            0.0,
+            1.0,
+        )
+        part["low_visibility_event_prob"] = (event_prob_feature * 0.3).astype("float32")
         part["low_vis_humidity"] = (part["low_visibility_event_prob"] * part["humidity"]).astype("float32")
         if "dew_proximity" in part.columns:
             part["low_vis_dew"] = (part["low_visibility_event_prob"] * part["dew_proximity"]).astype("float32")
@@ -1480,7 +1530,8 @@ def add_event_probability_features_for_inference(
 ) -> pd.DataFrame:
     enriched = feature_df.copy()
     event_X = align_feature_frame(enriched, event_feature_columns)
-    enriched["low_visibility_event_prob"] = event_classifier.predict_proba(event_X)[:, 1].astype("float32")
+    event_prob_feature = np.clip(event_classifier.predict_proba(event_X)[:, 1], 0.0, 1.0)
+    enriched["low_visibility_event_prob"] = (event_prob_feature * 0.3).astype("float32")
     enriched["low_vis_humidity"] = (enriched["low_visibility_event_prob"] * enriched["humidity"]).astype("float32")
     if "dew_proximity" in enriched.columns:
         enriched["low_vis_dew"] = (enriched["low_visibility_event_prob"] * enriched["dew_proximity"]).astype("float32")
@@ -1772,7 +1823,7 @@ def run_pipeline(
     accepted_bundle: Dict[str, object] = {}
     accepted_test_df = pd.DataFrame()
     accepted_metrics: Dict[str, object] = {}
-    best_rank = None
+    best_visibility_r2 = -np.inf
 
     for stage in stages:
         try:
@@ -1796,16 +1847,11 @@ def run_pipeline(
             vis_summary["visibility_mae"],
         )
 
-        stage_rank = (
-            vis_summary["low_visibility_r2"],
-            vis_summary["severe_visibility_r2"],
-            vis_summary["overall_r2"],
-            -vis_summary["visibility_mae"],
-        )
-        logger.info(f"Stage {stage.name} selection rank: {stage_rank}")
+        stage_visibility_r2 = float(vis_summary["overall_r2"])
+        logger.info("Stage %s selection score: overall visibility R2=%.4f", stage.name, stage_visibility_r2)
 
-        if best_rank is None or stage_rank > best_rank:
-            best_rank = stage_rank
+        if np.isfinite(stage_visibility_r2) and stage_visibility_r2 > best_visibility_r2:
+            best_visibility_r2 = stage_visibility_r2
             accepted_stage_name = stage.name
             accepted_bundle = bundle
             accepted_test_df = stage_test_df
