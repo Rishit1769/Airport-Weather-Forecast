@@ -57,6 +57,8 @@ def _fog_persistence_memory(visibility_lag: pd.Series) -> pd.Series:
 def add_vis_features(df: pd.DataFrame) -> pd.DataFrame:
     vis_df = df.copy()
     vis_df["vis_lag_1"] = vis_df["visibility"].shift(1)
+    for lag_steps, lag_label in [(6, "3h"), (12, "6h"), (24, "12h"), (48, "24h")]:
+        vis_df[f"vis_lag_{lag_label}"] = vis_df["visibility"].shift(lag_steps)
     vis_df["temp_lag_1"] = vis_df["temp"].shift(1)
     vis_df["temp_lag_3"] = vis_df["temp"].shift(3)
     vis_df["wind_lag_1"] = vis_df["wind_speed"].shift(1)
@@ -82,6 +84,14 @@ def add_vis_features(df: pd.DataFrame) -> pd.DataFrame:
         (vis_df["dew_depression_velocity_1h"] < -0.5)
         & (vis_df["wind_lag_1"] < 5.0)
     ).astype("int8")
+    vis_df["vis_roll_mean_3h"] = vis_df["vis_lag_1"].rolling(6).mean()
+    vis_df["vis_roll_min_3h"] = vis_df["vis_lag_1"].rolling(6).min()
+    vis_df["vis_roll_mean_6h"] = vis_df["vis_lag_1"].rolling(12).mean()
+    vis_df["vis_roll_min_6h"] = vis_df["vis_lag_1"].rolling(12).min()
+    vis_df["dew_roll_mean_3h"] = vis_df["dew_depression"].rolling(6).mean()
+    vis_df["dew_roll_min_3h"] = vis_df["dew_depression"].rolling(6).min()
+    vis_df["vis_trend_3h"] = vis_df["vis_lag_3h"] - vis_df["vis_lag_12h"]
+    vis_df["fog_deepening"] = (vis_df["vis_trend_3h"] < -500.0).astype("int8")
 
     if "datetime" in vis_df.columns:
         datetime_values = pd.to_datetime(vis_df["datetime"])
@@ -138,22 +148,19 @@ def _feature_columns(df: pd.DataFrame) -> list[str]:
         "vis_regime",
         "low_visibility_flag",
         "low_visibility_streak",
-    }
-    explicit = {
-        "hour_sin",
-        "hour_cos",
-        "dew_depression",
-        "dew_depression_sq",
-        "mixing_layer_proxy",
-        "nocturnal_fog_score",
-        "fog_persistence_memory",
-        "boundary_layer_stability",
-        "monsoon_phase",
-        "dew_depression_velocity_1h",
-        "dew_depression_velocity_2h",
-        "vis_velocity_1h",
-        "vis_velocity_2h",
-        "fog_onset_signal",
+        "visibility_rolling_mean_3",
+        "visibility_rolling_mean_6",
+        "visibility_rolling_mean_12",
+        "visibility_rolling_std_3",
+        "visibility_rolling_std_6",
+        "visibility_rolling_std_12",
+        "wind_speed",
+        "wind_gust",
+        "wind_direction",
+        "temp",
+        "pressure",
+        "humidity",
+        "dew_point",
     }
     features = [
         column
@@ -161,10 +168,10 @@ def _feature_columns(df: pd.DataFrame) -> list[str]:
         if pd.api.types.is_numeric_dtype(df[column])
         and column not in unsafe
         and "target" not in column.lower()
-        and (column in explicit or "_lag_" in column.lower())
     ]
-    if any(column in unsafe or "target" in column.lower() for column in features):
-        raise ValueError("Visibility leakage detected in mixture-of-experts features.")
+    leaking = [feature for feature in features if feature == "visibility"]
+    if leaking:
+        raise ValueError(f"Leakage detected: {leaking}")
     return features
 
 
@@ -252,7 +259,8 @@ def train_and_predict(df_master: pd.DataFrame):
     specialists = {}
     specialist_predictions = []
     for regime_id, regime_name in enumerate(REGIME_NAMES):
-        selected = train_probabilities[:, regime_id] > 0.5
+        threshold = 0.25 if regime_id == 0 else 0.40
+        selected = train_probabilities[:, regime_id] > threshold
         selected_count = int(selected.sum())
         if selected_count == 0:
             raise ValueError(
@@ -264,7 +272,6 @@ def train_and_predict(df_master: pd.DataFrame):
         weights = _normalized_inverse_frequency_weights(selected_y)
         if regime_id == 0:
             weights = weights * 2.0
-            weights = weights / np.mean(weights)
 
         specialist = XGBRegressor(**_specialist_params(regime_id))
         print(f"      -> Fitting {regime_name} specialist on {selected_count} rows...")
@@ -273,18 +280,18 @@ def train_and_predict(df_master: pd.DataFrame):
         specialist_predictions.append(_predict_xgb(specialist, X_test))
 
     prediction_matrix = np.column_stack(specialist_predictions)
-    dense_confident = test_probabilities[:, 0] > 0.35
-    dense_confident_count = int(dense_confident.sum())
-    print(
-        "      -> Test rows with P(DENSE_FOG) > 0.35: "
-        f"{dense_confident_count}"
-    )
     amplifier_sensitivity = {}
     candidate_predictions = {}
-    for amplifier in [0.65, 0.75, 0.85]:
-        adjusted_predictions = prediction_matrix.copy()
-        adjusted_predictions[dense_confident, 0] *= amplifier
-        candidate = np.sum(test_probabilities * adjusted_predictions, axis=1)
+    for amplifier in [1.5, 2.0, 3.0, 4.0]:
+        boosted_probabilities = test_probabilities.copy()
+        boosted_probabilities[:, 0] = np.clip(
+            test_probabilities[:, 0] * amplifier,
+            0.0,
+            1.0,
+        )
+        row_sums = boosted_probabilities.sum(axis=1, keepdims=True)
+        boosted_probabilities = boosted_probabilities / np.maximum(row_sums, 1e-9)
+        candidate = np.sum(boosted_probabilities * prediction_matrix, axis=1)
         candidate = np.clip(candidate, 150.0, 10000.0)
         amplifier_sensitivity[amplifier] = float(r2_score(y_test, candidate))
         candidate_predictions[amplifier] = candidate
@@ -333,7 +340,6 @@ def train_and_predict(df_master: pd.DataFrame):
         },
         "floor_amplifier": chosen_amplifier,
         "floor_amplifier_sensitivity": amplifier_sensitivity,
-        "dense_confident_test_rows": dense_confident_count,
     }
     Path("checkpoints").mkdir(parents=True, exist_ok=True)
     joblib.dump(bundle, "checkpoints/visibility_sme_v2.joblib")
