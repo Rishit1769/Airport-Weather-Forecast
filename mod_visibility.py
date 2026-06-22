@@ -25,6 +25,7 @@ def add_vis_features(df: pd.DataFrame) -> pd.DataFrame:
     vis_df["dew_depression"] = vis_df["temp_lag_1"] - dew_point
     vis_df["dew_dep_squared"] = np.square(vis_df["dew_depression"])
     vis_df["temp_cooling_rate"] = vis_df["temp_lag_1"] - vis_df["temp_lag_3"]
+    vis_df["vis_volatility_3h"] = vis_df["vis_lag_1"].rolling(6).std().fillna(0.0)
 
     if "wind_speed" in vis_df.columns:
         vis_df["wind_lag_1"] = vis_df["wind_speed"].shift(1)
@@ -103,6 +104,7 @@ def train_and_predict(df_master: pd.DataFrame):
                 "dew_depression",
                 "dew_dep_squared",
                 "temp_cooling_rate",
+                "vis_volatility_3h",
                 "stagnation_index",
                 "wind_lag_1",
                 "is_fog_time",
@@ -116,16 +118,17 @@ def train_and_predict(df_master: pd.DataFrame):
     X_test = test_df[features]
 
     model = XGBRegressor(
-        n_estimators=1200,
+        n_estimators=1500,
         learning_rate=0.015,
-        max_depth=6,
-        gamma=2.0,
-        reg_lambda=5.0,
-        subsample=0.8,
-        colsample_bytree=0.8,
+        max_depth=8,
+        gamma=0.1,
+        reg_lambda=1.0,
+        subsample=0.85,
+        colsample_bytree=0.85,
         tree_method="hist",
         device="cuda",
-        objective="reg:squarederror",
+        objective="reg:pseudohubererror",
+        huber_slope=1.0,
         random_state=42,
         n_jobs=-1,
     )
