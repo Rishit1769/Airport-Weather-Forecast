@@ -54,7 +54,7 @@ def _r2_for_result(result):
     if "metrics" in result:
         return float(result["metrics"]["r2"])
     component_metrics = result["component_metrics"]
-    return float(min(component_metrics["sin"]["r2"], component_metrics["cos"]["r2"]))
+    return float(min(metric["r2"] for metric in component_metrics.values()))
 
 
 def generate_combined_dashboard(results_dict):
