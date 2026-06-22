@@ -35,6 +35,9 @@ def add_temp_features(df: pd.DataFrame) -> pd.DataFrame:
     # Thermal inertia using only lagged observations.
     temp_df["temp_ema_3h"] = temp_df["temp_lag_1"].ewm(span=6, adjust=False).mean()
     temp_df["temp_ema_6h"] = temp_df["temp_lag_1"].ewm(span=12, adjust=False).mean()
+    temp_df["temp_roll_mean_3h"] = temp_df["temp_lag_1"].rolling(6).mean()
+    temp_df["temp_roll_max_6h"] = temp_df["temp_lag_1"].rolling(12).max()
+    temp_df["temp_roll_min_6h"] = temp_df["temp_lag_1"].rolling(12).min()
 
     # Coastal dew-point boundary.
     if "dew_point" in temp_df.columns:
@@ -61,22 +64,81 @@ def train_and_predict(df: pd.DataFrame):
         raise ValueError("Temperature chronological split generated an empty partition.")
 
     # Ensure absolutely no target leakage from the shared data pipeline.
+    current_temp_derived = {
+        "temp_dew_diff",
+        "temp_humidity",
+        "humidity_temperature",
+        "dew_point_depression",
+        "wet_bulb",
+        "dew_gap",
+        "dew_gap_change",
+        "dew_proximity",
+        "near_dew_flag",
+    }
+    unsafe_rolling_prefixes = (
+        "temp_rolling_",
+        "temp_dew_diff_rolling_",
+    )
     drop_cols = [
         col
         for col in temp_df.columns
-        if "target" in col.lower() or col == "temp" or col == "datetime"
+        if (
+            "target" in col.lower()
+            or col == "temp"
+            or col == "datetime"
+            or col in current_temp_derived
+            or col.startswith(unsafe_rolling_prefixes)
+        )
     ]
-    features = [col for col in temp_df.columns if col not in drop_cols]
+    module_features = {
+        "temp_lag_1",
+        "temp_lag_2",
+        "temp_lag_3",
+        "temp_diff_1h",
+        "temp_lag_24h",
+        "temp_lag_48h",
+        "hour_sin",
+        "hour_cos",
+        "month_sin",
+        "month_cos",
+        "solar_thermal_peak",
+        "temp_ema_3h",
+        "temp_ema_6h",
+        "temp_roll_mean_3h",
+        "temp_roll_max_6h",
+        "temp_roll_min_6h",
+        "dew_point_lag_1",
+        "temp_dew_depression",
+    }
+    features = [
+        col
+        for col in temp_df.columns
+        if col not in drop_cols and (col in module_features or "_lag_" in col.lower())
+    ]
     feature_columns = [col for col in features if pd.api.types.is_numeric_dtype(temp_df[col])]
     if any("target" in col.lower() for col in feature_columns):
         raise ValueError("Target leakage detected in temperature feature columns.")
+    leaked_features = [
+        col
+        for col in feature_columns
+        if col in current_temp_derived or col.startswith(unsafe_rolling_prefixes)
+    ]
+    if leaked_features:
+        raise ValueError(f"Current-temperature-derived features detected: {leaked_features}")
 
-    X_train = train_df[feature_columns]
+    validation_index = int(len(train_df) * 0.90)
+    fit_df = train_df.iloc[:validation_index]
+    validation_df = train_df.iloc[validation_index:]
+    if fit_df.empty or validation_df.empty:
+        raise ValueError("Temperature validation split generated an empty partition.")
+
+    X_train = fit_df[feature_columns]
+    X_validation = validation_df[feature_columns]
     X_test = test_df[feature_columns]
 
     # Learn the immediate temperature change, then reconstruct absolute temperature.
-    y_train_delta = train_df["temp"] - train_df["temp_lag_1"]
-    y_test_delta = test_df["temp"] - test_df["temp_lag_1"]
+    y_train_delta = fit_df["temp"] - fit_df["temp_lag_1"]
+    y_validation_delta = validation_df["temp"] - validation_df["temp_lag_1"]
     y_test_abs = test_df["temp"]
 
     model = XGBRegressor(
@@ -98,7 +160,7 @@ def train_and_predict(df: pd.DataFrame):
     model.fit(
         X_train,
         y_train_delta,
-        eval_set=[(X_test, y_test_delta)],
+        eval_set=[(X_validation, y_validation_delta)],
         verbose=False,
     )
 
@@ -124,7 +186,9 @@ def train_and_predict(df: pd.DataFrame):
     r2 = float(r2_score(y_test_abs, preds_abs))
     rmse = float(np.sqrt(mean_squared_error(y_test_abs, preds_abs)))
     mae = float(mean_absolute_error(y_test_abs, preds_abs))
+    persistence_r2 = float(r2_score(y_test_abs, X_test["temp_lag_1"]))
     print(f"      -> Temp Specialist metrics: R2 = {r2:.4f} | RMSE = {rmse:.4f} | MAE = {mae:.4f}")
+    print(f"      -> Persistence baseline R2 (temp_lag_1 only): {persistence_r2:.4f}")
 
     Path("checkpoints").mkdir(parents=True, exist_ok=True)
     joblib.dump(model, "checkpoints/temp_target_model.joblib")
