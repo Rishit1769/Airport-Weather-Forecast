@@ -805,17 +805,23 @@ def predict_visibility_hurdle(model_bundle: Dict[str, object], X: pd.DataFrame) 
     pred_low_raw = predict_xgboost_model(model_bundle["low_vis_specialist"], X)
     pred_low = np.expm1(pred_low_raw)
     pred_high = predict_xgboost_model(model_bundle["high_vis_specialist"], X)
-    visibility_pred = (prob_low * pred_low) + ((1.0 - prob_low) * pred_high)
 
-    is_high_vis = prob_low < 0.5
-    visibility_pred = np.where(is_high_vis & (visibility_pred >= 8500.0), 10000.0, visibility_pred)
+    is_low_vis_regime = prob_low > 0.60
+    visibility_pred = np.where(is_low_vis_regime, pred_low, pred_high)
+
+    is_high_vis_regime = ~is_low_vis_regime
     visibility_pred = np.where(
-        is_high_vis & (visibility_pred >= 5500.0) & (visibility_pred < 7000.0),
+        is_high_vis_regime & (visibility_pred >= 8500.0),
+        10000.0,
+        visibility_pred,
+    )
+    visibility_pred = np.where(
+        is_high_vis_regime & (visibility_pred >= 5500.0) & (visibility_pred < 7000.0),
         6000.0,
         visibility_pred,
     )
     visibility_pred = np.where(
-        is_high_vis & (visibility_pred >= 7000.0) & (visibility_pred < 8500.0),
+        is_high_vis_regime & (visibility_pred >= 7000.0) & (visibility_pred < 8500.0),
         8000.0,
         visibility_pred,
     )
