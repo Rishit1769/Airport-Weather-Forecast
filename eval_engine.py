@@ -3,6 +3,7 @@ from pathlib import Path
 
 import matplotlib.pyplot as plt
 import numpy as np
+from sklearn.metrics import r2_score
 
 logger = logging.getLogger(__name__)
 
@@ -12,8 +13,17 @@ DASHBOARD_PATH = PLOTS_DIR / "combined_dashboard.png"
 
 def _series_from_results(results_dict):
     wind = results_dict["wind"]
+    temp_true, temp_pred = results_dict["temp"]
     return [
-        ("Temperature (C)", results_dict["temp"]),
+        (
+            "Temperature (C)",
+            {
+                "index": np.arange(len(temp_true)),
+                "y_true": temp_true,
+                "y_pred": temp_pred,
+                "metrics": {"r2": float(r2_score(temp_true, temp_pred))},
+            },
+        ),
         ("Pressure (hPa)", results_dict["pressure"]),
         ("Visibility (m)", results_dict["visibility"]),
         (
@@ -31,9 +41,16 @@ def _series_from_results(results_dict):
     ]
 
 
+def _r2_for_result(result):
+    if "metrics" in result:
+        return float(result["metrics"]["r2"])
+    component_metrics = result["component_metrics"]
+    return float(min(component_metrics["sin"]["r2"], component_metrics["cos"]["r2"]))
+
+
 def generate_combined_dashboard(results_dict):
     PLOTS_DIR.mkdir(parents=True, exist_ok=True)
-    fig, axes = plt.subplots(1, 6, figsize=(30, 6))
+    fig, axes = plt.subplots(6, 1, figsize=(18, 24))
 
     for ax, (title, result) in zip(axes, _series_from_results(results_dict)):
         y_true = np.asarray(result["y_true"], dtype=np.float64)
@@ -41,11 +58,12 @@ def generate_combined_dashboard(results_dict):
         index = result["index"]
         ax.plot(index, y_true, label="Actual", linewidth=0.8)
         ax.plot(index, y_pred, label="Predicted", linewidth=0.8, alpha=0.8)
-        ax.set_title(title)
+        ax.set_title(f"{title} | R2={_r2_for_result(result):.4f}")
         ax.grid(True, alpha=0.25)
-        ax.tick_params(axis="x", rotation=45)
         ax.legend(loc="upper right", fontsize=8)
 
+    axes[-1].tick_params(axis="x", rotation=45)
+    axes[-1].set_xlabel("Datetime")
     fig.tight_layout()
     fig.savefig(DASHBOARD_PATH, dpi=150, bbox_inches="tight")
     plt.close(fig)
@@ -65,8 +83,10 @@ def generate_combined_dashboard(results_dict):
                 result["wind_gust"]["metrics"],
                 result["wind_dir"]["circular_mae_deg"],
             )
+        elif target_name == "temp":
+            y_true, y_pred = result
+            logger.info("Temperature R2: %.4f", r2_score(y_true, y_pred))
         else:
             logger.info("%s metrics: %s", target_name, result["metrics"])
     logger.info("Saved combined dashboard: %s", DASHBOARD_PATH)
     return DASHBOARD_PATH
-
