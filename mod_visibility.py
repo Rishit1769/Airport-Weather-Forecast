@@ -23,26 +23,13 @@ def add_vis_features(df: pd.DataFrame) -> pd.DataFrame:
         dew_point = vis_df["temp_lag_1"] - 5.0
 
     vis_df["dew_depression"] = vis_df["temp_lag_1"] - dew_point
-    vis_df["dew_dep_squared"] = np.square(vis_df["dew_depression"])
 
     if "wind_speed" in vis_df.columns:
         vis_df["wind_lag_1"] = vis_df["wind_speed"].shift(1)
-    vis_df["vis_volatility_3h"] = vis_df["vis_lag_1"].rolling(6).std().fillna(0.0)
+        stagnation = 1.0 / (vis_df["wind_lag_1"] + 1.0)
+        vis_df["stagnation_24h"] = stagnation.rolling(48).sum().fillna(0.0)
 
-    if "datetime" in vis_df.columns:
-        datetime_values = pd.to_datetime(vis_df["datetime"])
-    else:
-        datetime_values = vis_df.index
-    hour_float = datetime_values.hour + (datetime_values.minute / 60.0)
-    solar_intensity = np.maximum(
-        0.0,
-        np.sin(2.0 * np.pi * (hour_float - 6.0) / 24.0),
-    )
-    vis_df["solar_accumulation_4h"] = (
-        pd.Series(solar_intensity, index=vis_df.index).rolling(8).sum().fillna(0.0)
-    )
-
-    return vis_df.dropna(subset=["vis_lag_1", "temp_lag_3"])
+    return vis_df.dropna(subset=["temp_lag_1"])
 
 
 def apply_vis_outage_mask(df: pd.DataFrame) -> pd.DataFrame:
@@ -65,8 +52,16 @@ def train_and_predict(df_master: pd.DataFrame):
     if train_df.empty or test_df.empty:
         raise ValueError("Visibility chronological split generated an empty partition.")
 
-    y_train_extinction = 10000.0 / train_df["visibility"]
+    y_train = train_df["visibility"]
     y_test_abs = test_df["visibility"]
+
+    counts, bins = np.histogram(y_train, bins=10)
+    bin_indices = np.digitize(y_train, bins) - 1
+    bin_indices = np.clip(bin_indices, 0, len(counts) - 1)
+    safe_counts = np.maximum(counts, 1)
+    sample_weights = 1.0 / safe_counts[bin_indices]
+    sample_weights = sample_weights / np.mean(sample_weights)
+    print(f"      -> Visibility sample-weight mean: {np.mean(sample_weights):.6f}")
 
     unsafe_visibility_features = {
         "visibility_trend",
@@ -102,10 +97,8 @@ def train_and_predict(df_master: pd.DataFrame):
                 "month_sin",
                 "month_cos",
                 "dew_depression",
-                "dew_dep_squared",
-                "vis_volatility_3h",
+                "stagnation_24h",
                 "wind_lag_1",
-                "solar_accumulation_4h",
             }
         )
     ]
@@ -115,31 +108,38 @@ def train_and_predict(df_master: pd.DataFrame):
     X_train = train_df[features]
     X_test = test_df[features]
 
+    constraints = {}
+    if "dew_depression" in features:
+        constraints["dew_depression"] = 1
+    if "stagnation_24h" in features:
+        constraints["stagnation_24h"] = -1
+    if "wind_lag_1" in features:
+        constraints["wind_lag_1"] = 1
+    monotone_tuple = tuple(constraints.get(feature, 0) for feature in features)
+
     model = XGBRegressor(
-        n_estimators=1800,
+        n_estimators=2000,
         learning_rate=0.015,
-        max_depth=7,
-        gamma=0.2,
-        reg_lambda=1.0,
+        max_depth=8,
+        gamma=0.5,
         subsample=0.85,
         colsample_bytree=0.85,
         tree_method="hist",
         device="cuda",
         objective="reg:squarederror",
+        monotone_constraints=monotone_tuple,
         random_state=42,
         n_jobs=-1,
     )
 
-    print("      -> Fitting Visibility Specialist (Extinction Space)...")
-    model.fit(X_train, y_train_extinction, verbose=False)
+    print("      -> Fitting Visibility Specialist (Linear Space + Weights + Constraints)...")
+    model.fit(X_train, y_train, sample_weight=sample_weights, verbose=False)
 
-    preds_extinction = model.get_booster().predict(
+    preds = model.get_booster().predict(
         xgb.DMatrix(X_test, enable_categorical=True),
         strict_shape=False,
     )
-    safe_extinction = np.maximum(preds_extinction, 1e-6)
-    preds_abs = 10000.0 / safe_extinction
-    preds_abs = np.clip(preds_abs, 150.0, 10000.0)
+    preds_abs = np.clip(preds, 150.0, 10000.0)
 
     r2 = float(r2_score(y_test_abs, preds_abs))
     rmse = float(np.sqrt(mean_squared_error(y_test_abs, preds_abs)))
