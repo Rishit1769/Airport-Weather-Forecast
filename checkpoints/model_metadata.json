@@ -1,5 +1,5 @@
 {
-  "trained_at_utc": "2026-06-22 18:21:37 UTC",
+  "trained_at_utc": "2026-06-22 18:40:02 UTC",
   "data_range": {
     "start": "2016-01-01T00:00:00",
     "end": "2025-12-31T23:30:00"
@@ -14,8 +14,6 @@
   "stage_config": {
     "name": "+PhysicsSignals",
     "add_enhanced_signals": true,
-    "add_event_probability_feature": false,
-    "use_visibility_weighting": false,
     "reg_params": {
       "gamma": 0.0,
       "reg_alpha": 0.0,
@@ -39,7 +37,6 @@
     "pressure",
     "visibility"
   ],
-  "event_feature_columns": [],
   "validation_metrics": {
     "temp_target": {
       "rmse": 1.0545494686901156,
@@ -72,23 +69,23 @@
       "r2": 0.9666277623448759
     },
     "visibility_target": {
-      "rmse": 429.30126704650905,
-      "mae": 302.0856660260774,
-      "r2": 0.5215540339028755
+      "rmse": 428.727018095406,
+      "mae": 306.50073686551843,
+      "r2": 0.5228331261463717
     },
     "wind_dir_summary": {
       "circular_mae_deg": 32.817156985141104,
       "circular_rmse_deg": 48.40026703209676
     },
     "visibility_summary": {
-      "overall_r2": 0.5215540339028755,
-      "low_visibility_r2": 0.4774054012064447,
-      "severe_visibility_r2": -85.87008923617697,
-      "visibility_mae": 302.0856660260774,
-      "low_visibility_mae": 297.76185767272386,
-      "severe_visibility_mae": 1466.7269569374798,
-      "low_visibility_count": 17424,
-      "severe_visibility_count": 110
+      "overall_r2": 0.5228331261463717,
+      "low_visibility_r2": 0.5218794641184692,
+      "severe_visibility_r2": -51.466368558966266,
+      "visibility_mae": 306.50073686551843,
+      "low_visibility_mae": 305.7090453471639,
+      "severe_visibility_mae": 1407.9403831274878,
+      "low_visibility_count": 17561,
+      "severe_visibility_count": 147
     },
     "operational_metrics": {
       "temp": {
@@ -109,7 +106,7 @@
         "r2": 0.9666277623448759
       },
       "visibility": {
-        "r2": 0.5215540339028755
+        "r2": 0.5228331261463717
       }
     }
   },
@@ -145,23 +142,23 @@
       "r2": 0.9633780090309852
     },
     "visibility_target": {
-      "rmse": 483.47012785561043,
-      "mae": 333.4696774986752,
-      "r2": 0.4305580383684481
+      "rmse": 475.89196062492925,
+      "mae": 331.4931161153833,
+      "r2": 0.44826956190497247
     },
     "wind_dir_summary": {
       "circular_mae_deg": 34.962113952032965,
       "circular_rmse_deg": 51.99986854504913
     },
     "visibility_summary": {
-      "overall_r2": 0.4305580383684481,
-      "low_visibility_r2": 0.3374451585183106,
-      "severe_visibility_r2": -124.48999980801493,
-      "visibility_mae": 333.4696774986752,
-      "low_visibility_mae": 323.20698706538434,
-      "severe_visibility_mae": 1612.8513255197192,
-      "low_visibility_count": 17185,
-      "severe_visibility_count": 43
+      "overall_r2": 0.44826956190497247,
+      "low_visibility_r2": 0.4450208853646177,
+      "severe_visibility_r2": -85.7386064069656,
+      "visibility_mae": 331.4931161153833,
+      "low_visibility_mae": 330.0055212494824,
+      "severe_visibility_mae": 1559.452397582667,
+      "low_visibility_count": 17491,
+      "severe_visibility_count": 83
     },
     "operational_metrics": {
       "temp": {
@@ -182,7 +179,7 @@
         "r2": 0.9633780090309852
       },
       "visibility": {
-        "r2": 0.4305580383684481
+        "r2": 0.44826956190497247
       }
     }
   },

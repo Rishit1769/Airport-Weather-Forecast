@@ -94,8 +94,6 @@ class DataSplits:
 class StageConfig:
     name: str
     add_enhanced_signals: bool
-    add_event_probability_feature: bool
-    use_visibility_weighting: bool
     reg_params: Dict[str, float]
 
 
@@ -604,7 +602,7 @@ def add_targets(df: pd.DataFrame) -> pd.DataFrame:
     for col in CORE_TARGETS:
         shifted_target = df[col].shift(-HORIZON)
         if col == "visibility":
-            shifted_target = shifted_target.clip(150.0, 10000.0)
+            shifted_target = np.sqrt(shifted_target.clip(150.0, 10000.0))
         df[f"{col}_target"] = shifted_target
     df = df.dropna().copy()
 
@@ -688,87 +686,6 @@ def train_model(
             5.0,
         )
 
-    if target_col == "visibility_target":
-        y_class_train = (y_train < 5000.0).astype(int)
-        y_class_val = (y_val < 5000.0).astype(int)
-
-        gatekeeper = xgb.XGBClassifier(
-            objective="binary:logistic",
-            eval_metric="logloss",
-            n_estimators=1500,
-            max_depth=6,
-            learning_rate=0.03,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            early_stopping_rounds=50,
-            random_state=SEED,
-            n_jobs=-1,
-            tree_method=runtime["tree_method"],
-            device=runtime["device"],
-            gamma=reg_params.get("gamma", 0.0),
-            reg_alpha=reg_params.get("reg_alpha", 0.0),
-            reg_lambda=reg_params.get("reg_lambda", 1.0),
-        )
-        gatekeeper.fit(
-            X_train,
-            y_class_train,
-            eval_set=[(X_val, y_class_val)],
-            verbose=False,
-        )
-
-        low_train_mask = y_train < 5000.0
-        low_val_mask = y_val < 5000.0
-        high_train_mask = ~low_train_mask
-        high_val_mask = ~low_val_mask
-        if not low_train_mask.any() or not high_train_mask.any():
-            raise ValueError("Visibility hurdle training requires both low- and high-visibility rows.")
-
-        low_X_val = X_val.loc[low_val_mask] if low_val_mask.any() else X_train.loc[low_train_mask]
-        low_y_val = y_val.loc[low_val_mask] if low_val_mask.any() else y_train.loc[low_train_mask]
-        high_X_val = X_val.loc[high_val_mask] if high_val_mask.any() else X_train.loc[high_train_mask]
-        high_y_val = y_val.loc[high_val_mask] if high_val_mask.any() else y_train.loc[high_train_mask]
-
-        specialist_params = {
-            "objective": "reg:squarederror",
-            "n_estimators": 1500,
-            "max_depth": 6,
-            "learning_rate": 0.03,
-            "subsample": 0.8,
-            "colsample_bytree": 0.8,
-            "early_stopping_rounds": 50,
-            "random_state": SEED,
-            "n_jobs": -1,
-            "tree_method": runtime["tree_method"],
-            "device": runtime["device"],
-            "gamma": reg_params.get("gamma", 0.0),
-            "reg_alpha": reg_params.get("reg_alpha", 0.0),
-            "reg_lambda": reg_params.get("reg_lambda", 1.0),
-        }
-        low_vis_specialist = xgb.XGBRegressor(**specialist_params)
-        high_vis_specialist = xgb.XGBRegressor(**specialist_params)
-
-        low_weights = sample_weight_train[low_train_mask.to_numpy()] if sample_weight_train is not None else None
-        high_weights = sample_weight_train[high_train_mask.to_numpy()] if sample_weight_train is not None else None
-        low_vis_specialist.fit(
-            X_train.loc[low_train_mask],
-            np.log1p(y_train.loc[low_train_mask]),
-            sample_weight=low_weights,
-            eval_set=[(low_X_val, np.log1p(low_y_val))],
-            verbose=False,
-        )
-        high_vis_specialist.fit(
-            X_train.loc[high_train_mask],
-            y_train.loc[high_train_mask],
-            sample_weight=high_weights,
-            eval_set=[(high_X_val, high_y_val)],
-            verbose=False,
-        )
-        return {
-            "gatekeeper": gatekeeper,
-            "low_vis_specialist": low_vis_specialist,
-            "high_vis_specialist": high_vis_specialist,
-        }
-
     model = xgb.XGBRegressor(
         objective="reg:squarederror",
         n_estimators=1500,
@@ -800,34 +717,6 @@ def clip_prediction(target_col: str, pred: np.ndarray) -> np.ndarray:
     return np.clip(pred, lo, hi)
 
 
-def predict_visibility_hurdle(model_bundle: Dict[str, object], X: pd.DataFrame) -> np.ndarray:
-    prob_low = np.clip(predict_xgboost_model(model_bundle["gatekeeper"], X), 0.0, 1.0)
-    pred_low_raw = predict_xgboost_model(model_bundle["low_vis_specialist"], X)
-    pred_low = np.expm1(pred_low_raw)
-    pred_high = predict_xgboost_model(model_bundle["high_vis_specialist"], X)
-
-    is_low_vis_regime = prob_low > 0.60
-    visibility_pred = np.where(is_low_vis_regime, pred_low, pred_high)
-
-    is_high_vis_regime = ~is_low_vis_regime
-    visibility_pred = np.where(
-        is_high_vis_regime & (visibility_pred >= 8500.0),
-        10000.0,
-        visibility_pred,
-    )
-    visibility_pred = np.where(
-        is_high_vis_regime & (visibility_pred >= 5500.0) & (visibility_pred < 7000.0),
-        6000.0,
-        visibility_pred,
-    )
-    visibility_pred = np.where(
-        is_high_vis_regime & (visibility_pred >= 7000.0) & (visibility_pred < 8500.0),
-        8000.0,
-        visibility_pred,
-    )
-    return np.clip(visibility_pred, 150.0, 10000.0)
-
-
 def predict_xgboost_model(model: object, X: pd.DataFrame) -> np.ndarray:
     xgb = import_xgboost()
     prediction_data = xgb.DMatrix(X, enable_categorical=True)
@@ -841,6 +730,11 @@ def predict_xgboost_model(model: object, X: pd.DataFrame) -> np.ndarray:
         ),
         dtype=np.float64,
     )
+
+
+def predict_visibility_regressor(model: object, X: pd.DataFrame) -> np.ndarray:
+    raw = predict_xgboost_model(model, X)
+    return np.clip(np.square(raw), 150.0, 10000.0)
 
 
 def validate_prediction_stability(target_col: str, raw_pred: np.ndarray, clipped_pred: np.ndarray) -> None:
@@ -857,11 +751,10 @@ def validate_prediction_stability(target_col: str, raw_pred: np.ndarray, clipped
 def predict(models: Dict[str, object], X: pd.DataFrame) -> Dict[str, np.ndarray]:
     preds: Dict[str, np.ndarray] = {}
     for target_col, model in models.items():
+        raw = predict_xgboost_model(model, X)
         if target_col == "visibility_target":
-            clipped = predict_visibility_hurdle(model, X)
-            raw = clipped
+            clipped = np.clip(np.square(raw), 150.0, 10000.0)
         else:
-            raw = predict_xgboost_model(model, X)
             clipped = clip_prediction(target_col, raw)
         validate_prediction_stability(target_col, raw, clipped)
         preds[target_col] = clipped
@@ -873,6 +766,8 @@ def evaluate(y_df: pd.DataFrame, preds: Dict[str, np.ndarray]) -> Dict[str, obje
     metrics: Dict[str, object] = {}
     for target_col in TARGET_COLUMNS:
         y_true = y_df[target_col].to_numpy(dtype=np.float64)
+        if target_col == "visibility_target":
+            y_true = np.square(y_true)
         y_pred = preds[target_col]
         metrics[target_col] = {
             "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
@@ -894,7 +789,7 @@ def evaluate(y_df: pd.DataFrame, preds: Dict[str, np.ndarray]) -> Dict[str, obje
         "circular_rmse_deg": float(np.sqrt(np.mean(np.square(wind_error)))),
     }
 
-    visibility_true = y_df["visibility_target"].to_numpy(dtype=np.float64)
+    visibility_true = np.square(y_df["visibility_target"].to_numpy(dtype=np.float64))
     visibility_pred = preds["visibility_target"]
     low_mask = visibility_true < 5000.0
     severe_mask = visibility_true < 1000.0
@@ -938,7 +833,6 @@ def train_pipeline(
     feature_cols: List[str],
     runtime: Dict[str, object],
     reg_params: Dict[str, float],
-    use_visibility_weighting: bool,
 ) -> Dict[str, object]:
     models: Dict[str, object] = {}
 
@@ -956,17 +850,6 @@ def train_pipeline(
         validate_no_nan_inf(split.val, [target_col], f"Val target {target_col}")
 
         logger.info(f"Training model for {target_col}")
-        sw = None
-        if use_visibility_weighting and target_col == "visibility_target":
-            sw, sw_stats = build_visibility_sample_weights(y_train)
-            logger.info(
-                "Visibility sample weights: low_vis=%d severe=%d min=%.1f max=%.1f mean=%.2f",
-                sw_stats["low_visibility_count"],
-                sw_stats["severe_visibility_count"],
-                sw_stats["weight_min"],
-                sw_stats["weight_max"],
-                sw_stats["weight_mean"],
-            )
         model = train_model(
             X_train,
             y_train,
@@ -974,7 +857,6 @@ def train_pipeline(
             y_val,
             runtime,
             reg_params,
-            sample_weight_train=sw,
             target_col=target_col,
         )
         models[target_col] = model
@@ -1035,80 +917,6 @@ def metrics_to_rows(stage_name: str, metrics: Dict[str, object]) -> List[Dict[st
             }
         )
     return rows
-
-
-def train_event_classifier(
-    X_train: pd.DataFrame,
-    y_train_event: pd.Series,
-    X_val: pd.DataFrame,
-    y_val_event: pd.Series,
-    runtime: Dict[str, object],
-):
-    xgb = import_xgboost()
-
-    y_arr = y_train_event.to_numpy(dtype=np.int32)
-    pos = max(int(y_arr.sum()), 1)
-    neg = max(len(y_arr) - pos, 1)
-    scale_pos_weight = neg / pos
-
-    clf = xgb.XGBClassifier(
-        n_estimators=400,
-        max_depth=6,
-        learning_rate=0.03,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        early_stopping_rounds=30,
-        random_state=SEED,
-        n_jobs=-1,
-        tree_method=runtime["tree_method"],
-        device=runtime["device"],
-        objective="binary:logistic",
-        eval_metric="logloss",
-        scale_pos_weight=scale_pos_weight,
-    )
-    clf.fit(X_train, y_train_event.astype(int), eval_set=[(X_val, y_val_event.astype(int))], verbose=False)
-    return clf
-
-
-def attach_event_probability_features(
-    split: DataSplits,
-    runtime: Dict[str, object],
-    feature_reference_df: pd.DataFrame,
-    event_threshold: float = 1000.0,
-) -> Tuple[DataSplits, object, List[str]]:
-    y_train_visibility = split.train["visibility_target"]
-    y_val_visibility = split.val["visibility_target"]
-    y_train_event = (y_train_visibility < event_threshold).astype(int)
-    y_val_event = (y_val_visibility < event_threshold).astype(int)
-
-    base_feature_cols = get_feature_columns(split.train, missing_reference_df=feature_reference_df)
-    event_clf = train_event_classifier(
-        split.train[base_feature_cols],
-        y_train_event,
-        split.val[base_feature_cols],
-        y_val_event,
-        runtime,
-    )
-
-    updated_train = split.train.copy()
-    updated_val = split.val.copy()
-    updated_test = split.test.copy()
-
-    for part in [updated_train, updated_val, updated_test]:
-        event_prob_feature = np.clip(
-            predict_xgboost_model(event_clf, part[base_feature_cols]),
-            0.0,
-            1.0,
-        )
-        part["low_visibility_event_prob"] = (event_prob_feature * 0.3).astype("float32")
-        part["low_vis_humidity"] = (part["low_visibility_event_prob"] * part["humidity"]).astype("float32")
-        if "dew_proximity" in part.columns:
-            part["low_vis_dew"] = (part["low_visibility_event_prob"] * part["dew_proximity"]).astype("float32")
-        else:
-            part["low_vis_dew"] = (part["low_visibility_event_prob"] * np.abs(part["temp"] - part["dew_point"])).astype("float32")
-
-    updated_split = DataSplits(train=updated_train, val=updated_val, test=updated_test)
-    return updated_split, event_clf, base_feature_cols
 
 
 def create_severe_dataset(
@@ -1230,32 +1038,6 @@ def compute_switch_diagnostics(y_true: pd.Series, severe_mask: np.ndarray) -> Di
         "false_positive_rate": false_positive_rate,
         "severe_model_usage_pct": float(severe_mask.mean() * 100.0),
     }
-
-
-def predict_with_regime_switch(
-    X: pd.DataFrame,
-    general_model: object,
-    severe_model: object,
-    threshold: float = 0.1,
-    event_prob_col: str = "low_visibility_event_prob",
-    return_mask: bool = False,
-) -> Tuple[np.ndarray, np.ndarray]:
-    if event_prob_col not in X.columns:
-        raise ValueError(f"Missing required event probability column: {event_prob_col}")
-
-    event_prob = pd.to_numeric(X[event_prob_col], errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
-    vis_drop_rate = pd.to_numeric(X.get("vis_drop_rate", pd.Series(0.0, index=X.index)), errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
-    severe_mask = (event_prob > float(threshold)) | (vis_drop_rate < -0.3)
-
-    general_pred = predict_visibility_hurdle(general_model, X)
-    severe_pred = predict_visibility_hurdle(severe_model, X)
-    validate_prediction_stability("visibility_target", general_pred, general_pred)
-    validate_prediction_stability("visibility_target", severe_pred, severe_pred)
-
-    final_pred = np.where(severe_mask, severe_pred, general_pred)
-    if return_mask:
-        return final_pred, severe_mask
-    return final_pred
 
 
 def run_regime_model_pipeline(
@@ -1380,8 +1162,11 @@ def run_regime_model_pipeline(
         int((split.train["visibility_target"] < severe_train_threshold).sum()),
     )
 
-    general_pred = predict_visibility_hurdle(general_model, X_test)
-    y_test = split.test["visibility_target"]
+    general_pred = predict_visibility_regressor(general_model, X_test)
+    y_test = pd.Series(
+        np.square(split.test["visibility_target"].to_numpy(dtype=np.float64)),
+        index=split.test.index,
+    )
     general_metrics = evaluate_visibility_predictions(y_test, general_pred)
 
     threshold_grid = [0.05, 0.1, 0.2, 0.3]
@@ -1551,7 +1336,6 @@ def run_regime_model_pipeline(
         "models": {
             "general": general_model,
             "severe": severe_model,
-            "event_classifier": event_clf,
         },
         "feature_columns": feature_cols,
         "test_index": [pd.Timestamp(ts).isoformat() for ts in split.test.index],
@@ -1597,19 +1381,9 @@ def run_stage(
     all_df = add_targets(feat_df)
     split = split_chronological(all_df)
 
-    event_clf = None
-    event_feature_cols: List[str] = []
-    if stage.add_event_probability_feature:
-        split, event_clf, event_feature_cols = attach_event_probability_features(
-            split,
-            runtime,
-            pre_target_df,
-            event_threshold=1000.0,
-        )
-
     feature_cols = get_feature_columns(split.train, missing_reference_df=pre_target_df)
 
-    bundle = train_pipeline(split, feature_cols, runtime, stage.reg_params, stage.use_visibility_weighting)
+    bundle = train_pipeline(split, feature_cols, runtime, stage.reg_params)
     X_val = split.val[feature_cols]
     val_preds = predict(bundle["models"], X_val)
     val_metrics = evaluate(split.val, val_preds)
@@ -1618,7 +1392,7 @@ def run_stage(
     preds = predict(bundle["models"], X_test)
     metrics = evaluate(split.test, preds)
     seg_metrics = evaluate_segments(
-        split.test["visibility_target"].to_numpy(dtype=np.float64),
+        np.square(split.test["visibility_target"].to_numpy(dtype=np.float64)),
         preds["visibility_target"],
     )
     bundle.update(
@@ -1626,12 +1400,8 @@ def run_stage(
             "stage_config": {
                 "name": stage.name,
                 "add_enhanced_signals": stage.add_enhanced_signals,
-                "add_event_probability_feature": stage.add_event_probability_feature,
-                "use_visibility_weighting": stage.use_visibility_weighting,
                 "reg_params": stage.reg_params,
             },
-            "event_classifier": event_clf,
-            "event_feature_columns": event_feature_cols,
             "validation_metrics": val_metrics,
         }
     )
@@ -1669,25 +1439,6 @@ def format_segment_table(rows: List[Dict[str, object]]) -> str:
     return "\n".join([header, sep] + body)
 
 
-def add_event_probability_features_for_inference(
-    feature_df: pd.DataFrame,
-    event_classifier: object,
-    event_feature_columns: List[str],
-) -> pd.DataFrame:
-    enriched = feature_df.copy()
-    event_X = align_feature_frame(enriched, event_feature_columns)
-    event_prob_feature = np.clip(predict_xgboost_model(event_classifier, event_X), 0.0, 1.0)
-    enriched["low_visibility_event_prob"] = (event_prob_feature * 0.3).astype("float32")
-    enriched["low_vis_humidity"] = (enriched["low_visibility_event_prob"] * enriched["humidity"]).astype("float32")
-    if "dew_proximity" in enriched.columns:
-        enriched["low_vis_dew"] = (enriched["low_visibility_event_prob"] * enriched["dew_proximity"]).astype("float32")
-    else:
-        enriched["low_vis_dew"] = (
-            enriched["low_visibility_event_prob"] * np.abs(enriched["temp"] - enriched["dew_point"])
-        ).astype("float32")
-    return enriched
-
-
 def save_training_checkpoints(
     bundle: Dict[str, object],
     checkpoint_dir: str,
@@ -1700,12 +1451,6 @@ def save_training_checkpoints(
         model_path = checkpoint_path / f"{target_col}_model.joblib"
         joblib.dump(model, model_path)
         logger.info("Saved checkpoint: %s", model_path)
-
-    event_classifier = bundle.get("event_classifier")
-    if event_classifier is not None:
-        event_path = checkpoint_path / "event_classifier_model.joblib"
-        joblib.dump(event_classifier, event_path)
-        logger.info("Saved checkpoint: %s", event_path)
 
     feature_path = checkpoint_path / "feature_columns.json"
     with feature_path.open("w", encoding="utf-8") as f:
@@ -1793,17 +1538,6 @@ def run_forecast(input_csv: str, checkpoint_dir: str, output_dir: str) -> Path:
         add_enhanced_signals=bool(stage_config.get("add_enhanced_signals", False)),
     )
 
-    if stage_config.get("add_event_probability_feature", False):
-        event_path = Path(checkpoint_dir) / "event_classifier_model.joblib"
-        if not event_path.exists():
-            raise FileNotFoundError(f"Missing event classifier checkpoint: {event_path}")
-        event_classifier = joblib.load(event_path)
-        feature_df = add_event_probability_features_for_inference(
-            feature_df,
-            event_classifier,
-            metadata.get("event_feature_columns", []),
-        )
-
     if len(feature_df) < HORIZON:
         raise ValueError(f"Forecast input must yield at least {HORIZON} complete half-hour feature rows.")
 
@@ -1840,14 +1574,48 @@ def save_plots(
     interactive: bool = False,
 ) -> List[str]:
     out_dir = Path(plots_dir)
-    if not interactive:
-        out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir.mkdir(parents=True, exist_ok=True)
 
-    saved_files: List[str] = []
+    fig_dash, axes = plt.subplots(len(CORE_TARGETS), 1, figsize=(16, 16), sharex=True)
+    for ax, base_name in zip(axes, CORE_TARGETS):
+        target_col = f"{base_name}_target"
+        actual = y_df[target_col].to_numpy(dtype=np.float64)
+        if target_col == "visibility_target":
+            actual = np.square(actual)
+        predicted = preds[target_col]
+        target_metrics = metrics.get(target_col, {})
+        ax.plot(index, actual, label="Actual", linewidth=1.0)
+        ax.plot(index, predicted, label="Predicted", linewidth=1.0, alpha=0.85)
+        ax.set_title(
+            f"{base_name}: Actual vs Predicted | "
+            f"RMSE={target_metrics.get('rmse', float('nan')):.3f}, "
+            f"MAE={target_metrics.get('mae', float('nan')):.3f}, "
+            f"R2={target_metrics.get('r2', float('nan')):.3f}"
+        )
+        ax.grid(True, alpha=0.3)
+        ax.legend(loc="upper right")
+    axes[-1].set_xlabel("Datetime")
+
+    dashboard_path = out_dir / "combined_dashboard.png"
+    fig_dash.tight_layout()
+    fig_dash.savefig(dashboard_path, dpi=150, bbox_inches="tight")
+    plt.close(fig_dash)
+
+    for png_path in out_dir.glob("*.png"):
+        if png_path.resolve() != dashboard_path.resolve():
+            try:
+                png_path.unlink()
+            except OSError:
+                pass
+
+    logger.info("Saved combined dashboard and removed other plot PNGs: %s", dashboard_path)
+    return [str(dashboard_path)]
 
     for base_name in CORE_TARGETS:
         target_col = f"{base_name}_target"
         actual = y_df[target_col].to_numpy(dtype=np.float64)
+        if target_col == "visibility_target":
+            actual = np.square(actual)
         predicted = preds[target_col]
         residuals = actual - predicted
 
@@ -1895,6 +1663,8 @@ def save_plots(
     for ax, base_name in zip(axes, CORE_TARGETS):
         target_col = f"{base_name}_target"
         actual = y_df[target_col].to_numpy(dtype=np.float64)
+        if target_col == "visibility_target":
+            actual = np.square(actual)
         predicted = preds[target_col]
         m = metrics.get(target_col, {})
         rmse = m.get("rmse", float("nan"))
@@ -1920,6 +1690,43 @@ def save_plots(
     return saved_files
 
 
+def save_visibility_sqrt_diagnostics(
+    y_df: pd.DataFrame,
+    preds: Dict[str, np.ndarray],
+    output_path: Path,
+) -> str:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    visibility_true = np.square(y_df["visibility_target"].to_numpy(dtype=np.float64))
+    visibility_pred = preds["visibility_target"]
+
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    axes[0].scatter(visibility_true, visibility_pred, s=8, alpha=0.25)
+    axes[0].plot([0, 10500], [0, 10500], "r--", linewidth=1.5, label="Perfect prediction")
+    axes[0].set_xlim(0, 10500)
+    axes[0].set_ylim(0, 10500)
+    axes[0].set_xlabel("True Visibility (m)")
+    axes[0].set_ylabel("Predicted Visibility (m)")
+    axes[0].set_title("Visibility: True vs Predicted")
+    axes[0].grid(True, alpha=0.3)
+    axes[0].legend()
+
+    sample_count = min(400, len(visibility_true))
+    sample_axis = np.arange(sample_count)
+    axes[1].plot(sample_axis, visibility_true[:sample_count], label="True", linewidth=1.2)
+    axes[1].plot(sample_axis, visibility_pred[:sample_count], label="Predicted", linewidth=1.2, alpha=0.85)
+    axes[1].set_xlabel("Test Sample")
+    axes[1].set_ylabel("Visibility (m)")
+    axes[1].set_title("First 400 Test Samples")
+    axes[1].grid(True, alpha=0.3)
+    axes[1].legend()
+
+    fig.tight_layout()
+    fig.savefig(output_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info("Saved visibility sqrt diagnostic: %s", output_path)
+    return str(output_path)
+
+
 @timed_step("run_pipeline")
 def run_pipeline(
     input_csv: str,
@@ -1941,22 +1748,11 @@ def run_pipeline(
         StageConfig(
             name="Baseline",
             add_enhanced_signals=False,
-            add_event_probability_feature=False,
-            use_visibility_weighting=False,
             reg_params={"gamma": 0.0, "reg_alpha": 0.0, "reg_lambda": 1.0},
         ),
         StageConfig(
             name="+PhysicsSignals",
             add_enhanced_signals=True,
-            add_event_probability_feature=False,
-            use_visibility_weighting=False,
-            reg_params={"gamma": 0.0, "reg_alpha": 0.0, "reg_lambda": 1.0},
-        ),
-        StageConfig(
-            name="+EventProbAndWeightedVis",
-            add_enhanced_signals=True,
-            add_event_probability_feature=True,
-            use_visibility_weighting=True,
             reg_params={"gamma": 0.0, "reg_alpha": 0.0, "reg_lambda": 1.0},
         ),
     ]
@@ -2061,7 +1857,6 @@ def run_pipeline(
         "stage_config": accepted_bundle["stage_config"],
         "target_columns": TARGET_COLUMNS,
         "operational_targets": OPERATIONAL_TARGET_ORDER,
-        "event_feature_columns": accepted_bundle.get("event_feature_columns", []),
         "validation_metrics": accepted_bundle["validation_metrics"],
         "test_metrics": accepted_metrics,
         "gate_threshold_r2": 0.90,
@@ -2079,7 +1874,6 @@ def run_pipeline(
         metrics=accepted_metrics,
         interactive=interactive_plots,
     )
-
     summary = {
         "rows": {
             "clean": int(len(clean_df)),

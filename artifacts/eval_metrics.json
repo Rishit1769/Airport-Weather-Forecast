@@ -32,23 +32,23 @@
       "r2": 0.9633780090309852
     },
     "visibility_target": {
-      "rmse": 483.47012785561043,
-      "mae": 333.4696774986752,
-      "r2": 0.4305580383684481
+      "rmse": 475.89196062492925,
+      "mae": 331.4931161153833,
+      "r2": 0.44826956190497247
     },
     "wind_dir_summary": {
       "circular_mae_deg": 34.962113952032965,
       "circular_rmse_deg": 51.99986854504913
     },
     "visibility_summary": {
-      "overall_r2": 0.4305580383684481,
-      "low_visibility_r2": 0.3374451585183106,
-      "severe_visibility_r2": -124.48999980801493,
-      "visibility_mae": 333.4696774986752,
-      "low_visibility_mae": 323.20698706538434,
-      "severe_visibility_mae": 1612.8513255197192,
-      "low_visibility_count": 17185,
-      "severe_visibility_count": 43
+      "overall_r2": 0.44826956190497247,
+      "low_visibility_r2": 0.4450208853646177,
+      "severe_visibility_r2": -85.7386064069656,
+      "visibility_mae": 331.4931161153833,
+      "low_visibility_mae": 330.0055212494824,
+      "severe_visibility_mae": 1559.452397582667,
+      "low_visibility_count": 17491,
+      "severe_visibility_count": 83
     },
     "operational_metrics": {
       "temp": {
@@ -69,7 +69,7 @@
         "r2": 0.9633780090309852
       },
       "visibility": {
-        "r2": 0.4305580383684481
+        "r2": 0.44826956190497247
       }
     }
   },
@@ -120,9 +120,9 @@
     {
       "stage": "Baseline",
       "target": "visibility_target",
-      "rmse": 486.6796568728371,
-      "mae": 334.3394612737427,
-      "r2": 0.42297243250233374
+      "rmse": 479.98328936077564,
+      "mae": 333.9830997781412,
+      "r2": 0.4387421311606706
     },
     {
       "stage": "+PhysicsSignals",
@@ -169,198 +169,114 @@
     {
       "stage": "+PhysicsSignals",
       "target": "visibility_target",
-      "rmse": 483.47012785561043,
-      "mae": 333.4696774986752,
-      "r2": 0.4305580383684481
-    },
-    {
-      "stage": "+EventProbAndWeightedVis",
-      "target": "temp_target",
-      "rmse": 1.0688507152779128,
-      "mae": 0.7959050235613203,
-      "r2": 0.8267644592325304
-    },
-    {
-      "stage": "+EventProbAndWeightedVis",
-      "target": "wind_dir_sin_target",
-      "rmse": 0.42750186987831756,
-      "mae": 0.308441410071896,
-      "r2": 0.620646873067402
-    },
-    {
-      "stage": "+EventProbAndWeightedVis",
-      "target": "wind_dir_cos_target",
-      "rmse": 0.5239829998639479,
-      "mae": 0.40946405840486966,
-      "r2": 0.37715622187557984
-    },
-    {
-      "stage": "+EventProbAndWeightedVis",
-      "target": "wind_speed_target",
-      "rmse": 2.5106688941374657,
-      "mae": 1.9775087156288664,
-      "r2": 0.6044968909980645
-    },
-    {
-      "stage": "+EventProbAndWeightedVis",
-      "target": "wind_gust_target",
-      "rmse": 3.509050244603722,
-      "mae": 2.750956365777793,
-      "r2": 0.6071164006148884
-    },
-    {
-      "stage": "+EventProbAndWeightedVis",
-      "target": "pressure_target",
-      "rmse": 0.7612752191807665,
-      "mae": 0.5626865637092686,
-      "r2": 0.9636430805053438
-    },
-    {
-      "stage": "+EventProbAndWeightedVis",
-      "target": "visibility_target",
-      "rmse": 484.9003042647471,
-      "mae": 333.3931274359943,
-      "r2": 0.4271840676737021
+      "rmse": 475.89196062492925,
+      "mae": 331.4931161153833,
+      "r2": 0.44826956190497247
     }
   ],
-  "comparison_table": "| Stage | Target | RMSE | MAE | R2 |\n|---|---|---:|---:|---:|\n| Baseline | temp_target | 1.0912 | 0.8091 | 0.8195 |\n| Baseline | wind_dir_sin_target | 0.4280 | 0.3100 | 0.6197 |\n| Baseline | wind_dir_cos_target | 0.5217 | 0.4038 | 0.3825 |\n| Baseline | wind_speed_target | 2.4904 | 1.9497 | 0.6109 |\n| Baseline | wind_gust_target | 3.5234 | 2.7567 | 0.6039 |\n| Baseline | pressure_target | 0.7633 | 0.5638 | 0.9635 |\n| Baseline | visibility_target | 486.6797 | 334.3395 | 0.4230 |\n| +PhysicsSignals | temp_target | 1.0789 | 0.7998 | 0.8235 |\n| +PhysicsSignals | wind_dir_sin_target | 0.4275 | 0.3082 | 0.6206 |\n| +PhysicsSignals | wind_dir_cos_target | 0.5234 | 0.4068 | 0.3786 |\n| +PhysicsSignals | wind_speed_target | 2.4966 | 1.9598 | 0.6089 |\n| +PhysicsSignals | wind_gust_target | 3.6124 | 2.8288 | 0.5836 |\n| +PhysicsSignals | pressure_target | 0.7640 | 0.5663 | 0.9634 |\n| +PhysicsSignals | visibility_target | 483.4701 | 333.4697 | 0.4306 |\n| +EventProbAndWeightedVis | temp_target | 1.0689 | 0.7959 | 0.8268 |\n| +EventProbAndWeightedVis | wind_dir_sin_target | 0.4275 | 0.3084 | 0.6206 |\n| +EventProbAndWeightedVis | wind_dir_cos_target | 0.5240 | 0.4095 | 0.3772 |\n| +EventProbAndWeightedVis | wind_speed_target | 2.5107 | 1.9775 | 0.6045 |\n| +EventProbAndWeightedVis | wind_gust_target | 3.5091 | 2.7510 | 0.6071 |\n| +EventProbAndWeightedVis | pressure_target | 0.7613 | 0.5627 | 0.9636 |\n| +EventProbAndWeightedVis | visibility_target | 484.9003 | 333.3931 | 0.4272 |",
+  "comparison_table": "| Stage | Target | RMSE | MAE | R2 |\n|---|---|---:|---:|---:|\n| Baseline | temp_target | 1.0912 | 0.8091 | 0.8195 |\n| Baseline | wind_dir_sin_target | 0.4280 | 0.3100 | 0.6197 |\n| Baseline | wind_dir_cos_target | 0.5217 | 0.4038 | 0.3825 |\n| Baseline | wind_speed_target | 2.4904 | 1.9497 | 0.6109 |\n| Baseline | wind_gust_target | 3.5234 | 2.7567 | 0.6039 |\n| Baseline | pressure_target | 0.7633 | 0.5638 | 0.9635 |\n| Baseline | visibility_target | 479.9833 | 333.9831 | 0.4387 |\n| +PhysicsSignals | temp_target | 1.0789 | 0.7998 | 0.8235 |\n| +PhysicsSignals | wind_dir_sin_target | 0.4275 | 0.3082 | 0.6206 |\n| +PhysicsSignals | wind_dir_cos_target | 0.5234 | 0.4068 | 0.3786 |\n| +PhysicsSignals | wind_speed_target | 2.4966 | 1.9598 | 0.6089 |\n| +PhysicsSignals | wind_gust_target | 3.6124 | 2.8288 | 0.5836 |\n| +PhysicsSignals | pressure_target | 0.7640 | 0.5663 | 0.9634 |\n| +PhysicsSignals | visibility_target | 475.8920 | 331.4931 | 0.4483 |",
   "low_visibility_rows": [
     {
       "stage": "Baseline",
-      "overall_r2": 0.42297243250233374,
-      "low_visibility_r2": 0.3287111188667319,
-      "severe_visibility_r2": -129.871233402103,
-      "visibility_mae": 334.3394612737427,
-      "low_visibility_mae": 323.9709784730835,
-      "severe_visibility_mae": 1651.8964373078447,
-      "low_visibility_count": 17185,
-      "severe_visibility_count": 43
+      "overall_r2": 0.4387421311606706,
+      "low_visibility_r2": 0.4346535366771842,
+      "severe_visibility_r2": -86.01224445071077,
+      "visibility_mae": 333.9830997781412,
+      "low_visibility_mae": 332.5564912086828,
+      "severe_visibility_mae": 1561.6003322493991,
+      "low_visibility_count": 17491,
+      "severe_visibility_count": 83
     },
     {
       "stage": "+PhysicsSignals",
-      "overall_r2": 0.4305580383684481,
-      "low_visibility_r2": 0.3374451585183106,
-      "severe_visibility_r2": -124.48999980801493,
-      "visibility_mae": 333.4696774986752,
-      "low_visibility_mae": 323.20698706538434,
-      "severe_visibility_mae": 1612.8513255197192,
-      "low_visibility_count": 17185,
-      "severe_visibility_count": 43
-    },
-    {
-      "stage": "+EventProbAndWeightedVis",
-      "overall_r2": 0.4271840676737021,
-      "low_visibility_r2": 0.3329966545541756,
-      "severe_visibility_r2": -132.80321015701546,
-      "visibility_mae": 333.3931274359943,
-      "low_visibility_mae": 323.28998167080846,
-      "severe_visibility_mae": 1672.0648640717657,
-      "low_visibility_count": 17185,
-      "severe_visibility_count": 43
+      "overall_r2": 0.44826956190497247,
+      "low_visibility_r2": 0.4450208853646177,
+      "severe_visibility_r2": -85.7386064069656,
+      "visibility_mae": 331.4931161153833,
+      "low_visibility_mae": 330.0055212494824,
+      "severe_visibility_mae": 1559.452397582667,
+      "low_visibility_count": 17491,
+      "severe_visibility_count": 83
     }
   ],
-  "low_visibility_table": "| Stage | Overall R2 | Low Vis R2 | Severe Vis R2 | Visibility MAE |\n|---|---:|---:|---:|---:|\n| Baseline | 0.4230 | 0.3287 | -129.8712 | 334.3395 |\n| +PhysicsSignals | 0.4306 | 0.3374 | -124.4900 | 333.4697 |\n| +EventProbAndWeightedVis | 0.4272 | 0.3330 | -132.8032 | 333.3931 |",
+  "low_visibility_table": "| Stage | Overall R2 | Low Vis R2 | Severe Vis R2 | Visibility MAE |\n|---|---:|---:|---:|---:|\n| Baseline | 0.4387 | 0.4347 | -86.0122 | 333.9831 |\n| +PhysicsSignals | 0.4483 | 0.4450 | -85.7386 | 331.4931 |",
   "segment_rows": [
     {
       "stage": "Baseline",
       "segment": "severe",
-      "count": 43,
-      "rmse": 1692.7807589372258,
-      "mae": 1651.8964373078447,
-      "r2": -129.871233402103
+      "count": 83,
+      "rmse": 1611.024398143126,
+      "mae": 1561.6003322493991,
+      "r2": -86.01224445071077
     },
     {
       "stage": "Baseline",
       "segment": "moderate",
-      "count": 7347,
-      "rmse": 444.10202758091646,
-      "mae": 293.90007864079644,
-      "r2": -1.4449904752412954
+      "count": 13995,
+      "rmse": 416.37719083806684,
+      "mae": 286.92432604662196,
+      "r2": -0.25213010200960495
     },
     {
       "stage": "Baseline",
       "segment": "clear",
-      "count": 10118,
-      "rmse": 504.44292161084456,
-      "mae": 358.10435495182026,
-      "r2": 0.0055871570829996164
+      "count": 3430,
+      "rmse": 637.0100321849322,
+      "mae": 496.2849388677904,
+      "r2": -0.7140564218157663
     },
     {
       "stage": "+PhysicsSignals",
       "segment": "severe",
-      "count": 43,
-      "rmse": 1657.6131201028134,
-      "mae": 1612.8513255197192,
-      "r2": -124.48999980801493
+      "count": 83,
+      "rmse": 1608.4892106961188,
+      "mae": 1559.452397582667,
+      "r2": -85.7386064069656
     },
     {
       "stage": "+PhysicsSignals",
       "segment": "moderate",
-      "count": 7347,
-      "rmse": 441.71772611648294,
-      "mae": 294.33719172608033,
-      "r2": -1.418807548779415
+      "count": 13995,
+      "rmse": 410.61250452767865,
+      "mae": 284.2552586144122,
+      "r2": -0.2176989643539351
     },
     {
       "stage": "+PhysicsSignals",
       "segment": "clear",
-      "count": 10118,
-      "rmse": 501.10787880199996,
-      "mae": 356.4478314921868,
-      "r2": 0.018692490935199757
-    },
-    {
-      "stage": "+EventProbAndWeightedVis",
-      "segment": "severe",
-      "count": 43,
-      "rmse": 1711.6378543705464,
-      "mae": 1672.0648640717657,
-      "r2": -132.80321015701546
-    },
-    {
-      "stage": "+EventProbAndWeightedVis",
-      "segment": "moderate",
-      "count": 7347,
-      "rmse": 444.2775166073824,
-      "mae": 294.88957891519954,
-      "r2": -1.4469231562285132
-    },
-    {
-      "stage": "+EventProbAndWeightedVis",
-      "segment": "clear",
-      "count": 10118,
-      "rmse": 501.0839972306733,
-      "mae": 355.66261610044774,
-      "r2": 0.018786022120125256
+      "count": 3430,
+      "rmse": 636.7642204644104,
+      "mae": 494.51737132363576,
+      "r2": -0.7127338245451684
     }
   ],
-  "segment_table": "| Stage | Segment | Count | RMSE | MAE | R2 |\n|---|---|---:|---:|---:|---:|\n| Baseline | severe | 43 | 1692.7808 | 1651.8964 | -129.8712 |\n| Baseline | moderate | 7347 | 444.1020 | 293.9001 | -1.4450 |\n| Baseline | clear | 10118 | 504.4429 | 358.1044 | 0.0056 |\n| +PhysicsSignals | severe | 43 | 1657.6131 | 1612.8513 | -124.4900 |\n| +PhysicsSignals | moderate | 7347 | 441.7177 | 294.3372 | -1.4188 |\n| +PhysicsSignals | clear | 10118 | 501.1079 | 356.4478 | 0.0187 |\n| +EventProbAndWeightedVis | severe | 43 | 1711.6379 | 1672.0649 | -132.8032 |\n| +EventProbAndWeightedVis | moderate | 7347 | 444.2775 | 294.8896 | -1.4469 |\n| +EventProbAndWeightedVis | clear | 10118 | 501.0840 | 355.6626 | 0.0188 |",
+  "segment_table": "| Stage | Segment | Count | RMSE | MAE | R2 |\n|---|---|---:|---:|---:|---:|\n| Baseline | severe | 83 | 1611.0244 | 1561.6003 | -86.0122 |\n| Baseline | moderate | 13995 | 416.3772 | 286.9243 | -0.2521 |\n| Baseline | clear | 3430 | 637.0100 | 496.2849 | -0.7141 |\n| +PhysicsSignals | severe | 83 | 1608.4892 | 1559.4524 | -85.7386 |\n| +PhysicsSignals | moderate | 13995 | 410.6125 | 284.2553 | -0.2177 |\n| +PhysicsSignals | clear | 3430 | 636.7642 | 494.5174 | -0.7127 |",
   "before_after_comparison": {
     "baseline": {
-      "overall_r2": 0.42297243250233374,
-      "low_visibility_r2": 0.3287111188667319,
-      "severe_visibility_r2": -129.871233402103,
-      "visibility_mae": 334.3394612737427,
-      "low_visibility_mae": 323.9709784730835,
-      "severe_visibility_mae": 1651.8964373078447,
-      "low_visibility_count": 17185,
-      "severe_visibility_count": 43
+      "overall_r2": 0.4387421311606706,
+      "low_visibility_r2": 0.4346535366771842,
+      "severe_visibility_r2": -86.01224445071077,
+      "visibility_mae": 333.9830997781412,
+      "low_visibility_mae": 332.5564912086828,
+      "severe_visibility_mae": 1561.6003322493991,
+      "low_visibility_count": 17491,
+      "severe_visibility_count": 83
     },
     "final": {
-      "overall_r2": 0.4305580383684481,
-      "low_visibility_r2": 0.3374451585183106,
-      "severe_visibility_r2": -124.48999980801493,
-      "visibility_mae": 333.4696774986752,
-      "low_visibility_mae": 323.20698706538434,
-      "severe_visibility_mae": 1612.8513255197192,
-      "low_visibility_count": 17185,
-      "severe_visibility_count": 43
+      "overall_r2": 0.44826956190497247,
+      "low_visibility_r2": 0.4450208853646177,
+      "severe_visibility_r2": -85.7386064069656,
+      "visibility_mae": 331.4931161153833,
+      "low_visibility_mae": 330.0055212494824,
+      "severe_visibility_mae": 1559.452397582667,
+      "low_visibility_count": 17491,
+      "severe_visibility_count": 83
     },
     "delta": {
-      "overall_r2": 0.007585605866114342,
-      "low_visibility_r2": 0.008734039651578707,
-      "severe_visibility_r2": 5.381233594088073,
-      "visibility_mae": -0.8697837750675035
+      "overall_r2": 0.009527430744301846,
+      "low_visibility_r2": 0.010367348687433497,
+      "severe_visibility_r2": 0.27363804374516576,
+      "visibility_mae": -2.4899836627578793
     }
   }
 }
