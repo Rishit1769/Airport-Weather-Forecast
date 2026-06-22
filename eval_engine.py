@@ -36,7 +36,10 @@ def _series_from_results(results_dict):
             },
         ),
         (
-            "Wind Speed (kt)",
+            (
+                "Wind Speed (kt), "
+                f"PICP10-90={wind['wind_speed']['picp_10_90']:.3f}"
+            ),
             {"index": wind["index"], **wind["wind_speed"]},
         ),
         (
@@ -67,6 +70,16 @@ def generate_combined_dashboard(results_dict):
         index = result["index"]
         ax.plot(index, y_true, label="Actual", linewidth=0.8)
         ax.plot(index, y_pred, label="Predicted", linewidth=0.8, alpha=0.8)
+        if "quantiles" in result:
+            lower = np.asarray(result["quantiles"]["q_0.10"], dtype=np.float64)
+            upper = np.asarray(result["quantiles"]["q_0.90"], dtype=np.float64)
+            ax.fill_between(
+                index,
+                lower,
+                upper,
+                alpha=0.18,
+                label="10-90% interval",
+            )
         ax.set_title(f"{title} | R2={_r2_for_result(result):.4f}")
         ax.grid(True, alpha=0.25)
         ax.legend(loc="upper right", fontsize=8)
@@ -87,10 +100,13 @@ def generate_combined_dashboard(results_dict):
     for target_name, result in results_dict.items():
         if target_name == "wind":
             logger.info(
-                "Wind metrics: speed=%s gust=%s direction_circular_mae=%.3f",
+                "Wind metrics: speed=%s gust=%s direction_circular_mae=%.3f "
+                "picp_10_90=%.4f interval_width=%.4f",
                 result["wind_speed"]["metrics"],
                 result["wind_gust"]["metrics"],
                 result["wind_dir"]["circular_mae_deg"],
+                result["wind_speed"]["picp_10_90"],
+                result["wind_speed"]["mean_interval_width"],
             )
         elif target_name in {"temp", "visibility"}:
             y_true, y_pred = result

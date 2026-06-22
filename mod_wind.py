@@ -29,27 +29,52 @@ def add_wind_features(df: pd.DataFrame) -> pd.DataFrame:
     radians = np.radians(wind_df[direction_col])
     wind_df["u_wind"] = -wind_df["wind_speed"] * np.sin(radians)
     wind_df["v_wind"] = -wind_df["wind_speed"] * np.cos(radians)
-    wind_df["kinetic_energy_lag_1"] = (
-        0.5 * np.square(wind_df["wind_speed"].shift(1))
-    )
+    wind_df["ke"] = 0.5 * np.square(wind_df["wind_speed"])
+    wind_df["ke_lag_1"] = wind_df["ke"].shift(1)
 
-    # Use only completed observations so rolling volatility cannot leak the target.
-    wind_df["speed_volatility_3h"] = wind_df["wind_speed"].shift(1).rolling(6).std()
-    wind_df["u_volatility_3h"] = wind_df["u_wind"].shift(1).rolling(6).std()
-    wind_df["v_volatility_3h"] = wind_df["v_wind"].shift(1).rolling(6).std()
+    # Causal spectral bands use only kinetic energy observed before this row.
+    wind_df["ke_volatility_1h"] = wind_df["ke_lag_1"].rolling(2).std()
+    wind_df["ke_volatility_6h"] = wind_df["ke_lag_1"].rolling(12).std()
+    wind_df["ke_volatility_24h"] = wind_df["ke_lag_1"].rolling(48).std()
+    wind_df["ke_divergence"] = (
+        wind_df["ke_lag_1"].rolling(2).mean()
+        - wind_df["ke_lag_1"].rolling(48).mean()
+    )
 
     wind_df["u_lag_1"] = wind_df["u_wind"].shift(1)
     wind_df["v_lag_1"] = wind_df["v_wind"].shift(1)
     wind_df["speed_lag_1"] = wind_df["wind_speed"].shift(1)
+    wind_df["u_shear_3h"] = wind_df["u_lag_1"] - wind_df["u_wind"].shift(6)
+    wind_df["v_shear_3h"] = wind_df["v_lag_1"] - wind_df["v_wind"].shift(6)
+    wind_df["total_shear_3h"] = np.sqrt(
+        np.square(wind_df["u_shear_3h"])
+        + np.square(wind_df["v_shear_3h"])
+    )
+
     gap_mask_1 = wind_df["time_gap_hrs"] > 1.0
     wind_df.loc[
         gap_mask_1,
-        ["u_lag_1", "v_lag_1", "speed_lag_1"],
+        ["u_lag_1", "v_lag_1", "speed_lag_1", "ke_lag_1"],
     ] = np.nan
-    volatility_gap_mask = wind_df["time_gap_hrs"].rolling(6).max() > 1.0
+    gap_mask_2 = wind_df["time_gap_hrs"].rolling(2).max() > 1.0
+    gap_mask_6h = wind_df["time_gap_hrs"].rolling(12).max() > 1.0
+    gap_mask_24h = wind_df["time_gap_hrs"].rolling(48).max() > 1.0
     wind_df.loc[
-        volatility_gap_mask,
-        ["speed_volatility_3h", "u_volatility_3h", "v_volatility_3h"],
+        gap_mask_2,
+        ["ke_volatility_1h"],
+    ] = np.nan
+    wind_df.loc[
+        gap_mask_6h,
+        [
+            "ke_volatility_6h",
+            "u_shear_3h",
+            "v_shear_3h",
+            "total_shear_3h",
+        ],
+    ] = np.nan
+    wind_df.loc[
+        gap_mask_24h,
+        ["ke_volatility_24h", "ke_divergence"],
     ] = np.nan
 
     if "pressure" in wind_df.columns:
@@ -74,7 +99,7 @@ def add_wind_features(df: pd.DataFrame) -> pd.DataFrame:
                 / (wind_df["pressure_diff_1h"] + 1e-5)
             )
             wind_df.loc[
-                volatility_gap_mask,
+                gap_mask_6h,
                 ["temp_roc_1h", "abl_instability"],
             ] = np.nan
 
@@ -83,7 +108,7 @@ def add_wind_features(df: pd.DataFrame) -> pd.DataFrame:
         2.0 * np.pi * (hour_float - 14.0) / 24.0
     )
 
-    required_history = ["u_lag_1", "kinetic_energy_lag_1"]
+    required_history = ["u_lag_1", "ke_lag_1", "ke_volatility_24h"]
     if "pressure_diff_3h" in wind_df.columns:
         required_history.append("pressure_diff_3h")
     wind_df = wind_df.dropna(subset=required_history)
@@ -147,13 +172,7 @@ def train_and_predict(df_master: pd.DataFrame):
 
     y_train_u = train_df["u_wind"]
     y_train_v = train_df["v_wind"]
-    y_train_speed_log = np.log1p(train_df["wind_speed"])
-    train_gust_delta = np.clip(
-        train_df["wind_gust"] - train_df["wind_speed"],
-        0.0,
-        None,
-    )
-    y_train_gust_delta_log = np.log1p(train_gust_delta)
+    y_train_speed = train_df["wind_speed"]
 
     drop_cols = [
         column
@@ -167,6 +186,7 @@ def train_and_predict(df_master: pd.DataFrame):
             "wind_dir",
             "u_wind",
             "v_wind",
+            "ke",
             "wind_dir_sin",
             "wind_dir_cos",
             "datetime",
@@ -207,22 +227,27 @@ def train_and_predict(df_master: pd.DataFrame):
     model_v = XGBRegressor(**xgb_params)
     model_v.fit(X_train, y_train_v, verbose=False)
 
-    print("      -> Fitting Log-Speed Specialist...")
-    model_speed = XGBRegressor(**xgb_params)
-    model_speed.fit(X_train, y_train_speed_log, verbose=False)
-
-    print("      -> Fitting Log-Gust Delta Specialist...")
-    model_gust_delta = XGBRegressor(**xgb_params)
-    model_gust_delta.fit(X_train, y_train_gust_delta_log, verbose=False)
+    quantile_models = {}
+    for alpha in (0.10, 0.50, 0.90):
+        print(f"      -> Fitting Wind-Speed Quantile q={alpha:.2f}...")
+        quantile_params = xgb_params.copy()
+        quantile_params["objective"] = "reg:quantileerror"
+        quantile_params["quantile_alpha"] = alpha
+        model = XGBRegressor(**quantile_params)
+        model.fit(X_train, y_train_speed, verbose=False)
+        quantile_models[alpha] = model
 
     pred_u = _predict(model_u, X_test)
     pred_v = _predict(model_v, X_test)
-    pred_speed_log = _predict(model_speed, X_test)
-    pred_gust_delta_log = _predict(model_gust_delta, X_test)
+    pred_q10 = _predict(quantile_models[0.10], X_test)
+    pred_q50 = _predict(quantile_models[0.50], X_test)
+    pred_q90 = _predict(quantile_models[0.90], X_test)
 
-    pred_speed = np.clip(np.expm1(pred_speed_log), 0.0, 80.0)
-    pred_gust_delta = np.clip(np.expm1(pred_gust_delta_log), 0.0, 80.0)
-    pred_gust = np.clip(pred_speed + pred_gust_delta, pred_speed, 80.0)
+    # Guard against occasional quantile crossing before operational evaluation.
+    pred_lower = np.clip(np.minimum(pred_q10, pred_q90), 0.0, 80.0)
+    pred_upper = np.clip(np.maximum(pred_q10, pred_q90), 0.0, 80.0)
+    pred_speed = np.clip(pred_q50, pred_lower, pred_upper)
+    pred_gust = np.maximum(pred_speed, pred_upper)
     pred_direction = (
         np.degrees(np.arctan2(-pred_u, -pred_v)) + 360.0
     ) % 360.0
@@ -237,6 +262,10 @@ def train_and_predict(df_master: pd.DataFrame):
     gust_metrics = _metrics(actual_gust, pred_gust)
     u_metrics = _metrics(actual_u, pred_u)
     v_metrics = _metrics(actual_v, pred_v)
+    picp = float(
+        np.mean((actual_speed >= pred_lower) & (actual_speed <= pred_upper))
+    )
+    mean_interval_width = float(np.mean(pred_upper - pred_lower))
 
     circular_error = np.abs(
         (pred_direction - actual_direction + 180.0) % 360.0 - 180.0
@@ -245,17 +274,19 @@ def train_and_predict(df_master: pd.DataFrame):
     print(
         f"      -> Speed R2: {speed_metrics['r2']:.4f} | "
         f"Gust R2: {gust_metrics['r2']:.4f} | "
-        f"Dir MAE: {circular_mae:.2f} deg"
+        f"Dir MAE: {circular_mae:.2f} deg | "
+        f"PICP(10-90): {picp:.4f}"
     )
 
     Path("checkpoints").mkdir(parents=True, exist_ok=True)
     joblib.dump(model_u, "checkpoints/wind_u_model.joblib")
     joblib.dump(model_v, "checkpoints/wind_v_model.joblib")
-    joblib.dump(model_speed, "checkpoints/wind_speed_log_model.joblib")
-    joblib.dump(
-        model_gust_delta,
-        "checkpoints/wind_gust_delta_log_model.joblib",
-    )
+    for alpha, model in quantile_models.items():
+        suffix = int(round(alpha * 100))
+        joblib.dump(
+            model,
+            f"checkpoints/wind_speed_q{suffix:02d}_model.joblib",
+        )
 
     return {
         "index": test_df.index,
@@ -263,6 +294,13 @@ def train_and_predict(df_master: pd.DataFrame):
             "y_true": actual_speed,
             "y_pred": pred_speed,
             "metrics": speed_metrics,
+            "quantiles": {
+                "q_0.10": pred_lower,
+                "q_0.50": pred_speed,
+                "q_0.90": pred_upper,
+            },
+            "picp_10_90": picp,
+            "mean_interval_width": mean_interval_width,
         },
         "wind_gust": {
             "y_true": actual_gust,
