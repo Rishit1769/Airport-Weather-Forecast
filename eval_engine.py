@@ -14,6 +14,7 @@ DASHBOARD_PATH = PLOTS_DIR / "combined_dashboard.png"
 def _series_from_results(results_dict):
     wind = results_dict["wind"]
     temp_true, temp_pred = results_dict["temp"]
+    visibility_true, visibility_pred = results_dict["visibility"]
     return [
         (
             "Temperature (C)",
@@ -25,7 +26,15 @@ def _series_from_results(results_dict):
             },
         ),
         ("Pressure (hPa)", results_dict["pressure"]),
-        ("Visibility (m)", results_dict["visibility"]),
+        (
+            "Visibility (m)",
+            {
+                "index": np.arange(len(visibility_true)),
+                "y_true": visibility_true,
+                "y_pred": visibility_pred,
+                "metrics": {"r2": float(r2_score(visibility_true, visibility_pred))},
+            },
+        ),
         (
             "Wind Speed (kt)",
             {"index": wind["index"], **wind["wind_speed"]},
@@ -83,9 +92,9 @@ def generate_combined_dashboard(results_dict):
                 result["wind_gust"]["metrics"],
                 result["wind_dir"]["circular_mae_deg"],
             )
-        elif target_name == "temp":
+        elif target_name in {"temp", "visibility"}:
             y_true, y_pred = result
-            logger.info("Temperature R2: %.4f", r2_score(y_true, y_pred))
+            logger.info("%s R2: %.4f", target_name.title(), r2_score(y_true, y_pred))
         else:
             logger.info("%s metrics: %s", target_name, result["metrics"])
     logger.info("Saved combined dashboard: %s", DASHBOARD_PATH)
