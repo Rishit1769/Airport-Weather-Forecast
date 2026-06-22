@@ -26,16 +26,37 @@ def add_vis_features(df: pd.DataFrame) -> pd.DataFrame:
     vis_df["dew_dep_squared"] = np.square(vis_df["dew_depression"])
     vis_df["temp_cooling_rate"] = vis_df["temp_lag_1"] - vis_df["temp_lag_3"]
 
+    if "wind_speed" in vis_df.columns:
+        vis_df["wind_lag_1"] = vis_df["wind_speed"].shift(1)
     if "wind_speed" in vis_df.columns and "pressure" in vis_df.columns:
-        vis_df["stagnation_index"] = (
-            vis_df["pressure"].shift(1) / (vis_df["wind_speed"].shift(1) + 1.0)
+        vis_df["stagnation_index"] = vis_df["pressure"].shift(1) / (
+            vis_df["wind_speed"].shift(1) + 1.0
         )
+
+    if "datetime" in vis_df.columns:
+        datetime_values = pd.to_datetime(vis_df["datetime"])
+    else:
+        datetime_values = vis_df.index
+    vis_df["is_fog_time"] = (
+        (datetime_values.hour >= 2) & (datetime_values.hour <= 8)
+    ).astype(int)
 
     return vis_df.dropna(subset=["vis_lag_1", "temp_lag_3"])
 
 
+def apply_vis_outage_mask(df: pd.DataFrame) -> pd.DataFrame:
+    """Flags and removes forward-filled sensor outages."""
+    vis_diff = df["visibility"].diff().abs()
+    is_flatline = vis_diff.rolling(window=10).sum().eq(0.0)
+    return df.loc[~is_flatline].copy()
+
+
 def train_and_predict(df_master: pd.DataFrame):
-    vis_df = add_vis_features(df_master).dropna().copy()
+    vis_df = add_vis_features(df_master)
+    rows_before_mask = len(vis_df)
+    vis_df = apply_vis_outage_mask(vis_df)
+    print(f"      -> Visibility outage rows removed: {rows_before_mask - len(vis_df)}")
+    vis_df = vis_df.dropna().copy()
 
     split_idx = int(len(vis_df) * 0.85)
     train_df = vis_df.iloc[:split_idx].copy()
@@ -83,6 +104,8 @@ def train_and_predict(df_master: pd.DataFrame):
                 "dew_dep_squared",
                 "temp_cooling_rate",
                 "stagnation_index",
+                "wind_lag_1",
+                "is_fog_time",
             }
         )
     ]
@@ -93,10 +116,11 @@ def train_and_predict(df_master: pd.DataFrame):
     X_test = test_df[features]
 
     model = XGBRegressor(
-        n_estimators=1500,
-        learning_rate=0.02,
-        max_depth=8,
-        gamma=0.5,
+        n_estimators=1200,
+        learning_rate=0.015,
+        max_depth=6,
+        gamma=2.0,
+        reg_lambda=5.0,
         subsample=0.8,
         colsample_bytree=0.8,
         tree_method="hist",
@@ -127,4 +151,3 @@ def train_and_predict(df_master: pd.DataFrame):
     Path("checkpoints").mkdir(parents=True, exist_ok=True)
     joblib.dump(model, "checkpoints/visibility_target_model.joblib")
     return y_test_abs.values, preds_abs
-
