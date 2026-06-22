@@ -10,6 +10,16 @@ from xgboost import XGBClassifier, XGBRegressor
 REGIME_NAMES = ["DENSE_FOG", "MODERATE_FOG", "HAZE", "CLEAR"]
 
 
+def _save_bundle_atomic(bundle: dict, destination: Path) -> None:
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    try:
+        joblib.dump(bundle, temporary)
+        temporary.replace(destination)
+    finally:
+        if temporary.exists():
+            temporary.unlink()
+
+
 def _regime_labels(visibility: pd.Series) -> np.ndarray:
     values = visibility.to_numpy(dtype=np.float64)
     return np.select(
@@ -342,7 +352,7 @@ def train_and_predict(df_master: pd.DataFrame):
         "floor_amplifier_sensitivity": amplifier_sensitivity,
     }
     Path("checkpoints").mkdir(parents=True, exist_ok=True)
-    joblib.dump(bundle, "checkpoints/visibility_sme_v2.joblib")
-    joblib.dump(bundle, "checkpoints/visibility_sme.joblib")
-    joblib.dump(bundle, "checkpoints/visibility_target_model.joblib")
+    _save_bundle_atomic(bundle, Path("checkpoints/visibility_sme_v2.joblib"))
+    _save_bundle_atomic(bundle, Path("checkpoints/visibility_sme.joblib"))
+    _save_bundle_atomic(bundle, Path("checkpoints/visibility_target_model.joblib"))
     return y_test.values, blended_prediction
