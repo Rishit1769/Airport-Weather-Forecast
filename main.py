@@ -5,7 +5,7 @@ import random
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import joblib
 import matplotlib.pyplot as plt
@@ -26,6 +26,7 @@ LAG_STEPS = [1, 2, 3, 6, 12]
 ROLLING_MEAN_WINDOWS = [3, 6]
 ROLLING_STD_WINDOWS = [3, 6, 12]
 
+TRAIN_START = "2016-01-01"
 TRAIN_END = "2024-01-01"
 VAL_END = "2025-01-01"
 TEST_END = "2026-01-01"
@@ -33,6 +34,7 @@ TEST_END = "2026-01-01"
 BASE_CONTINUOUS = [
     "wind_dir",
     "wind_speed",
+    "wind_gust",
     "visibility",
     "temp",
     "dew_point",
@@ -45,6 +47,7 @@ BASE_BINARY = ["is_rain", "is_fog", "is_haze"]
 PHYSICAL_BOUNDS = {
     "wind_dir": (0.0, 360.0),
     "wind_speed": (0.0, 80.0),
+    "wind_gust": (0.0, 80.0),
     "visibility": (0.0, 12000.0),
     "temp": (-10.0, 55.0),
     "dew_point": (-20.0, 40.0),
@@ -53,16 +56,31 @@ PHYSICAL_BOUNDS = {
     "cloud_cover": (0.0, 8.0),
 }
 
-CORE_TARGETS = ["temp", "wind_speed", "visibility", "pressure", "humidity"]
+CORE_TARGETS = ["temp", "wind_dir_sin", "wind_dir_cos", "wind_speed", "wind_gust", "pressure", "visibility"]
 TARGET_COLUMNS = [f"{c}_target" for c in CORE_TARGETS]
+
+OPERATIONAL_TARGET_ORDER = ["temp", "wind_dir", "wind_speed", "wind_gust", "pressure", "visibility"]
 
 PRED_CLIP_BOUNDS = {
     "temp_target": (-10.0, 55.0),
+    "wind_dir_sin_target": (-1.0, 1.0),
+    "wind_dir_cos_target": (-1.0, 1.0),
     "wind_speed_target": (0.0, 80.0),
+    "wind_gust_target": (0.0, 80.0),
     "visibility_target": (0.0, 12000.0),
     "pressure_target": (950.0, 1050.0),
-    "humidity_target": (0.0, 100.0),
 }
+
+WIND_GUST_COVERAGE_THRESHOLD = 0.30
+FORECAST_WINDOW_SCHEDULE = [
+    {"issue": "00:30", "validity": "0100-0600 UTC"},
+    {"issue": "03:30", "validity": "0400-0900 UTC"},
+    {"issue": "06:30", "validity": "0700-1200 UTC"},
+    {"issue": "09:30", "validity": "1000-1500 UTC"},
+    {"issue": "12:30", "validity": "1300-1800 UTC"},
+    {"issue": "15:30", "validity": "1600-2100 UTC"},
+    {"issue": "18:30", "validity": "1900-2400 UTC"},
+]
 
 
 @dataclass
@@ -79,6 +97,120 @@ class StageConfig:
     add_event_probability_feature: bool
     use_visibility_weighting: bool
     reg_params: Dict[str, float]
+
+
+def ensure_wind_gust_column(df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, object]]:
+    df = df.copy()
+    observed_coverage = float(df.attrs.get("wind_gust_observed_coverage", 0.0))
+    if "wind_gust" in df.columns:
+        observed_gust = pd.to_numeric(df["wind_gust"], errors="coerce").clip(0.0, 80.0)
+        if "wind_gust_observed_coverage" not in df.attrs:
+            observed_coverage = float(observed_gust.notna().mean())
+    else:
+        observed_gust = pd.Series(np.nan, index=df.index, dtype="float64")
+
+    proxy_gust = (pd.to_numeric(df["wind_speed"], errors="coerce") * 1.4).clip(0.0, 80.0)
+    gust_source = "observed"
+
+    if observed_coverage > WIND_GUST_COVERAGE_THRESHOLD:
+        gust_series = observed_gust.interpolate(method="time", limit=2, limit_direction="both", limit_area="inside")
+        gust_series = gust_series.combine_first(proxy_gust)
+    else:
+        # METAR gust is sparse in some exports, so fall back to a simple operational proxy.
+        gust_series = proxy_gust
+        gust_source = "proxy"
+        logger.warning(
+            "Using wind_gust proxy = wind_speed * 1.4 clipped to 0-80 kt because observed coverage is %.2f%%.",
+            observed_coverage * 100.0,
+        )
+
+    df["wind_gust"] = gust_series.astype("float32")
+    return df, {
+        "wind_gust_source": gust_source,
+        "wind_gust_observed_coverage": observed_coverage,
+    }
+
+
+def reconstruct_wind_direction_degrees(sin_values: np.ndarray, cos_values: np.ndarray) -> np.ndarray:
+    return np.degrees(np.arctan2(sin_values, cos_values)) % 360.0
+
+
+def circular_error_degrees(y_true_deg: np.ndarray, y_pred_deg: np.ndarray) -> np.ndarray:
+    return np.abs((y_pred_deg - y_true_deg + 180.0) % 360.0 - 180.0)
+
+
+def summarize_operational_metrics(metrics: Dict[str, object]) -> Dict[str, Dict[str, float]]:
+    wind_dir_sin_r2 = float(metrics["wind_dir_sin_target"]["r2"])
+    wind_dir_cos_r2 = float(metrics["wind_dir_cos_target"]["r2"])
+    wind_dir_summary = metrics["wind_dir_summary"]
+    return {
+        "temp": {"r2": float(metrics["temp_target"]["r2"])},
+        # Wind direction is modeled via sin/cos, so the gate uses the weaker of the two internal regressors.
+        "wind_dir": {
+            "r2": float(min(wind_dir_sin_r2, wind_dir_cos_r2)),
+            "component_r2_mean": float((wind_dir_sin_r2 + wind_dir_cos_r2) / 2.0),
+            "circular_mae_deg": float(wind_dir_summary["circular_mae_deg"]),
+        },
+        "wind_speed": {"r2": float(metrics["wind_speed_target"]["r2"])},
+        "wind_gust": {"r2": float(metrics["wind_gust_target"]["r2"])},
+        "pressure": {"r2": float(metrics["pressure_target"]["r2"])},
+        "visibility": {"r2": float(metrics["visibility_target"]["r2"])},
+    }
+
+
+def check_accuracy_gate(metrics: Dict[str, object], threshold: float = 0.90) -> bool:
+    operational_metrics = metrics.get("operational_metrics", summarize_operational_metrics(metrics))
+    lines = ["Accuracy gate summary (R2 >= 0.90):"]
+    gate_passed = True
+
+    for target_name in OPERATIONAL_TARGET_ORDER:
+        r2_value = float(operational_metrics[target_name]["r2"])
+        passed = bool(np.isfinite(r2_value) and r2_value >= threshold)
+        marker = "PASS" if passed else "FAIL"
+        lines.append(f"{marker:4} | {target_name:<10} | R2={r2_value:.4f}")
+        gate_passed = gate_passed and passed
+
+    for line in lines:
+        logger.info(line)
+
+    if gate_passed:
+        logger.info("Model meets operational threshold (>=90%% R2). Safe for operational forecast use.")
+    else:
+        logger.warning("Model does not meet operational threshold. Do not deploy to forecast mode.")
+    return gate_passed
+
+
+def align_feature_frame(df: pd.DataFrame, feature_columns: List[str]) -> pd.DataFrame:
+    aligned = df.copy()
+    missing_columns = [col for col in feature_columns if col not in aligned.columns]
+    for col in missing_columns:
+        aligned[col] = 0.0
+    if missing_columns:
+        logger.warning("Filled %d missing inference feature columns with zeros.", len(missing_columns))
+    return aligned[feature_columns].astype("float32")
+
+
+def determine_operational_window(now_utc: Optional[pd.Timestamp] = None) -> Dict[str, str]:
+    if now_utc is None:
+        now_utc = pd.Timestamp.now(tz="UTC")
+    else:
+        now_utc = pd.Timestamp(now_utc)
+        now_utc = now_utc.tz_localize("UTC") if now_utc.tzinfo is None else now_utc.tz_convert("UTC")
+    schedule_candidates: List[Tuple[pd.Timestamp, str]] = []
+
+    for day_offset in (-1, 0, 1):
+        base_day = now_utc.normalize() + pd.Timedelta(days=day_offset)
+        for entry in FORECAST_WINDOW_SCHEDULE:
+            hour, minute = [int(part) for part in entry["issue"].split(":")]
+            issue_ts = base_day + pd.Timedelta(hours=hour, minutes=minute)
+            schedule_candidates.append((issue_ts, entry["validity"]))
+
+    valid_candidates = [item for item in schedule_candidates if item[0] <= now_utc]
+    issue_ts, validity_label = max(valid_candidates, key=lambda item: item[0])
+    return {
+        "issued_at_utc": issue_ts.strftime("%Y-%m-%d %H:%M UTC"),
+        "validity_label": validity_label,
+    }
 
 
 def set_seed(seed: int = SEED) -> None:
@@ -207,6 +339,11 @@ def visibility_distribution(df: pd.DataFrame) -> Dict[str, int]:
 @timed_step("load_and_clean")
 def load_and_clean(input_csv: str) -> pd.DataFrame:
     raw_df = pd.read_csv(input_csv)
+    raw_gust_coverage = (
+        float(pd.to_numeric(raw_df["wind_gust"], errors="coerce").notna().mean())
+        if "wind_gust" in raw_df.columns
+        else 0.0
+    )
     raw_rows = len(raw_df)
     df = _ensure_datetime_index(raw_df)
     cleaned_rows = len(df)
@@ -255,7 +392,7 @@ def load_and_clean(input_csv: str) -> pd.DataFrame:
 
     logger.info(f"Rows dropped due to invalid datetime: {dropped_on_datetime}")
     logger.info(f"Estimated values interpolated (continuous): {interpolated_values}")
-    for col in ["temp", "wind_speed", "visibility", "pressure", "humidity"]:
+    for col in ["temp", "wind_speed", "wind_gust", "visibility", "pressure", "humidity"]:
         if col in df.columns:
             logger.info(f"Sanity {col}: min={float(df[col].min()):.3f}, max={float(df[col].max()):.3f}")
     logger.info(f"NaNs after load_and_clean: {int(df.isna().sum().sum())}")
@@ -264,8 +401,21 @@ def load_and_clean(input_csv: str) -> pd.DataFrame:
     df["temp_dew_diff"] = (df["temp"] - df["dew_point"]).clip(-30.0, 60.0)
     df["pressure_change"] = df["pressure"].diff().clip(-20.0, 20.0).fillna(0.0)
     df["wind_speed_change"] = df["wind_speed"].diff().clip(-40.0, 40.0).fillna(0.0)
+    df.attrs["wind_gust_observed_coverage"] = raw_gust_coverage
 
     return df
+
+
+def prepare_input_data(input_csv: str) -> Tuple[pd.DataFrame, Dict[str, object]]:
+    clean_df = load_and_clean(input_csv)
+    clean_df, gust_metadata = ensure_wind_gust_column(clean_df)
+    wind_percentile_threshold = calibrate_wind_speed_threshold(clean_df)
+    clean_df = apply_wind_speed_limits(clean_df, wind_percentile_threshold)
+    logger.info("Applied wind speed hard cap and train-based percentile clipping before feature engineering.")
+    return clean_df, {
+        **gust_metadata,
+        "wind_speed_percentile_threshold": float(wind_percentile_threshold),
+    }
 
 
 @timed_step("add_features")
@@ -286,6 +436,7 @@ def add_features(
     stable_cols = [
         "temp",
         "wind_speed",
+        "wind_gust",
         "visibility",
         "pressure",
         "humidity",
@@ -429,9 +580,9 @@ def add_targets(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def split_chronological(df: pd.DataFrame) -> DataSplits:
-    train = df.loc[(df.index >= "2016-01-01") & (df.index < TRAIN_END)].copy()
+    train = df.loc[(df.index >= TRAIN_START) & (df.index < TRAIN_END)].copy()
     val = df.loc[(df.index >= TRAIN_END) & (df.index < VAL_END)].copy()
-    test = df.loc[(df.index >= "2025-01-01") & (df.index < "2026-01-01")].copy()
+    test = df.loc[(df.index >= VAL_END) & (df.index < TEST_END)].copy()
     if train.empty or val.empty or test.empty:
         raise ValueError("Chronological split generated empty partition(s).")
     return DataSplits(train=train, val=val, test=test)
@@ -548,6 +699,21 @@ def evaluate(y_df: pd.DataFrame, preds: Dict[str, np.ndarray]) -> Dict[str, obje
             "mae": float(mean_absolute_error(y_true, y_pred)),
             "r2": float(r2_score(y_true, y_pred)),
         }
+
+    wind_true = reconstruct_wind_direction_degrees(
+        y_df["wind_dir_sin_target"].to_numpy(dtype=np.float64),
+        y_df["wind_dir_cos_target"].to_numpy(dtype=np.float64),
+    )
+    wind_pred = reconstruct_wind_direction_degrees(
+        preds["wind_dir_sin_target"],
+        preds["wind_dir_cos_target"],
+    )
+    wind_error = circular_error_degrees(wind_true, wind_pred)
+    metrics["wind_dir_summary"] = {
+        "circular_mae_deg": float(np.mean(wind_error)),
+        "circular_rmse_deg": float(np.sqrt(np.mean(np.square(wind_error)))),
+    }
+
     visibility_true = y_df["visibility_target"].to_numpy(dtype=np.float64)
     visibility_pred = preds["visibility_target"]
     low_mask = visibility_true < 5000.0
@@ -562,6 +728,7 @@ def evaluate(y_df: pd.DataFrame, preds: Dict[str, np.ndarray]) -> Dict[str, obje
         "low_visibility_count": int(low_mask.sum()),
         "severe_visibility_count": int(severe_mask.sum()),
     }
+    metrics["operational_metrics"] = summarize_operational_metrics(metrics)
     return metrics
 
 
@@ -1234,8 +1401,10 @@ def run_stage(
     all_df = add_targets(feat_df)
     split = split_chronological(all_df)
 
+    event_clf = None
+    event_feature_cols: List[str] = []
     if stage.add_event_probability_feature:
-        split, event_clf, _ = attach_event_probability_features(
+        split, event_clf, event_feature_cols = attach_event_probability_features(
             split,
             runtime,
             pre_target_df,
@@ -1245,12 +1414,30 @@ def run_stage(
     feature_cols = get_feature_columns(split.train, missing_reference_df=pre_target_df)
 
     bundle = train_pipeline(split, feature_cols, runtime, stage.reg_params, stage.use_visibility_weighting)
+    X_val = split.val[feature_cols]
+    val_preds = predict(bundle["models"], X_val)
+    val_metrics = evaluate(split.val, val_preds)
+
     X_test = split.test[feature_cols]
     preds = predict(bundle["models"], X_test)
     metrics = evaluate(split.test, preds)
     seg_metrics = evaluate_segments(
         split.test["visibility_target"].to_numpy(dtype=np.float64),
         preds["visibility_target"],
+    )
+    bundle.update(
+        {
+            "stage_config": {
+                "name": stage.name,
+                "add_enhanced_signals": stage.add_enhanced_signals,
+                "add_event_probability_feature": stage.add_event_probability_feature,
+                "use_visibility_weighting": stage.use_visibility_weighting,
+                "reg_params": stage.reg_params,
+            },
+            "event_classifier": event_clf,
+            "event_feature_columns": event_feature_cols,
+            "validation_metrics": val_metrics,
+        }
     )
     return bundle, metrics, metrics["visibility_summary"], seg_metrics, split.test
 
@@ -1286,25 +1473,164 @@ def format_segment_table(rows: List[Dict[str, object]]) -> str:
     return "\n".join([header, sep] + body)
 
 
-def save_forecast_json(index: pd.DatetimeIndex, preds: Dict[str, np.ndarray], output_json: str) -> None:
-    out = []
-    for i, ts in enumerate(index):
-        out.append(
+def add_event_probability_features_for_inference(
+    feature_df: pd.DataFrame,
+    event_classifier: object,
+    event_feature_columns: List[str],
+) -> pd.DataFrame:
+    enriched = feature_df.copy()
+    event_X = align_feature_frame(enriched, event_feature_columns)
+    enriched["low_visibility_event_prob"] = event_classifier.predict_proba(event_X)[:, 1].astype("float32")
+    enriched["low_vis_humidity"] = (enriched["low_visibility_event_prob"] * enriched["humidity"]).astype("float32")
+    if "dew_proximity" in enriched.columns:
+        enriched["low_vis_dew"] = (enriched["low_visibility_event_prob"] * enriched["dew_proximity"]).astype("float32")
+    else:
+        enriched["low_vis_dew"] = (
+            enriched["low_visibility_event_prob"] * np.abs(enriched["temp"] - enriched["dew_point"])
+        ).astype("float32")
+    return enriched
+
+
+def save_training_checkpoints(
+    bundle: Dict[str, object],
+    checkpoint_dir: str,
+    metadata: Dict[str, object],
+) -> None:
+    checkpoint_path = Path(checkpoint_dir)
+    checkpoint_path.mkdir(parents=True, exist_ok=True)
+
+    for target_col, model in bundle["models"].items():
+        model_path = checkpoint_path / f"{target_col}_model.joblib"
+        joblib.dump(model, model_path)
+        logger.info("Saved checkpoint: %s", model_path)
+
+    event_classifier = bundle.get("event_classifier")
+    if event_classifier is not None:
+        event_path = checkpoint_path / "event_classifier_model.joblib"
+        joblib.dump(event_classifier, event_path)
+        logger.info("Saved checkpoint: %s", event_path)
+
+    feature_path = checkpoint_path / "feature_columns.json"
+    with feature_path.open("w", encoding="utf-8") as f:
+        json.dump(bundle["feature_columns"], f, indent=2)
+    logger.info("Saved checkpoint: %s", feature_path)
+
+    metadata_path = checkpoint_path / "model_metadata.json"
+    with metadata_path.open("w", encoding="utf-8") as f:
+        json.dump(metadata, f, indent=2)
+    logger.info("Saved checkpoint: %s", metadata_path)
+
+
+def load_training_checkpoints(checkpoint_dir: str) -> Tuple[Dict[str, object], List[str], Dict[str, object]]:
+    checkpoint_path = Path(checkpoint_dir)
+    metadata_path = checkpoint_path / "model_metadata.json"
+    feature_path = checkpoint_path / "feature_columns.json"
+    if not metadata_path.exists() or not feature_path.exists():
+        raise FileNotFoundError(f"Missing checkpoint metadata in {checkpoint_path}. Run --mode train first.")
+
+    with metadata_path.open("r", encoding="utf-8") as f:
+        metadata = json.load(f)
+    if not metadata.get("gate_passed", False):
+        raise RuntimeError("Forecast refused: saved model did not pass the 90% operational accuracy gate.")
+
+    with feature_path.open("r", encoding="utf-8") as f:
+        feature_columns = json.load(f)
+
+    models: Dict[str, object] = {}
+    for target_col in metadata.get("target_columns", TARGET_COLUMNS):
+        model_path = checkpoint_path / f"{target_col}_model.joblib"
+        if not model_path.exists():
+            raise FileNotFoundError(f"Missing target checkpoint: {model_path}")
+        models[target_col] = joblib.load(model_path)
+
+    return models, feature_columns, metadata
+
+
+def build_forecast_records(
+    forecast_index: pd.DatetimeIndex,
+    preds: Dict[str, np.ndarray],
+) -> List[Dict[str, object]]:
+    wind_direction = reconstruct_wind_direction_degrees(
+        preds["wind_dir_sin_target"],
+        preds["wind_dir_cos_target"],
+    )
+    records: List[Dict[str, object]] = []
+    for i, ts in enumerate(forecast_index):
+        records.append(
             {
-                "timestamp": pd.Timestamp(ts).isoformat(),
-                "forecast_timestamp": (pd.Timestamp(ts) + pd.Timedelta(hours=6)).isoformat(),
-                "temp": float(preds["temp_target"][i]),
-                "wind_speed": float(preds["wind_speed_target"][i]),
-                "visibility": float(preds["visibility_target"][i]),
-                "pressure": float(preds["pressure_target"][i]),
-                "humidity": float(preds["humidity_target"][i]),
+                "timestamp_utc": pd.Timestamp(ts).strftime("%Y-%m-%d %H:%M UTC"),
+                "temp_c": round(float(preds["temp_target"][i]), 1),
+                "wind_dir_deg": int(round(float(wind_direction[i]))) % 360,
+                "wind_speed_kt": round(float(preds["wind_speed_target"][i]), 1),
+                "wind_gust_kt": round(float(preds["wind_gust_target"][i]), 1),
+                "pressure_hpa": round(float(preds["pressure_target"][i]), 1),
+                "visibility_m": int(round(float(preds["visibility_target"][i]))),
             }
         )
+    return records
 
-    out_path = Path(output_json)
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    with out_path.open("w", encoding="utf-8") as f:
-        json.dump(out, f, indent=2)
+
+def print_forecast_table(records: List[Dict[str, object]], window: Dict[str, str]) -> None:
+    print("\nCSMI Airport (VABB) - 6-Hour Forecast")
+    print(f"Issued: {window['issued_at_utc']} | Validity: {window['validity_label']}")
+    print("-" * 102)
+    print(
+        f"{'Time (UTC)':<17} {'Temp(C)':>8} {'Wind Dir(deg)':>14} {'Wind Spd(kt)':>14} "
+        f"{'Gust(kt)':>10} {'Pressure(hPa)':>15} {'Visibility(m)':>15}"
+    )
+    for row in records:
+        time_label = pd.Timestamp(row["timestamp_utc"].replace(" UTC", "")).strftime("%H:%M")
+        print(
+            f"{time_label:<17} {row['temp_c']:>8.1f} {row['wind_dir_deg']:>14d} "
+            f"{row['wind_speed_kt']:>14.1f} {row['wind_gust_kt']:>10.1f} "
+            f"{row['pressure_hpa']:>15.1f} {row['visibility_m']:>15d}"
+        )
+
+
+def run_forecast(input_csv: str, checkpoint_dir: str, output_dir: str) -> Path:
+    models, feature_columns, metadata = load_training_checkpoints(checkpoint_dir)
+    clean_df, _ = prepare_input_data(input_csv)
+    stage_config = metadata.get("stage_config", {})
+    feature_df = add_features(
+        clean_df,
+        add_enhanced_signals=bool(stage_config.get("add_enhanced_signals", False)),
+    )
+
+    if stage_config.get("add_event_probability_feature", False):
+        event_path = Path(checkpoint_dir) / "event_classifier_model.joblib"
+        if not event_path.exists():
+            raise FileNotFoundError(f"Missing event classifier checkpoint: {event_path}")
+        event_classifier = joblib.load(event_path)
+        feature_df = add_event_probability_features_for_inference(
+            feature_df,
+            event_classifier,
+            metadata.get("event_feature_columns", []),
+        )
+
+    if len(feature_df) < HORIZON:
+        raise ValueError(f"Forecast input must yield at least {HORIZON} complete half-hour feature rows.")
+
+    anchor_df = feature_df.tail(HORIZON)
+    X_forecast = align_feature_frame(anchor_df, feature_columns)
+    preds = predict(models, X_forecast)
+    forecast_index = pd.DatetimeIndex(anchor_df.index + pd.Timedelta(hours=6))
+    records = build_forecast_records(forecast_index, preds)
+    window = determine_operational_window()
+    print_forecast_table(records, window)
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    artifact_path = output_path / f"forecast_{pd.Timestamp.now(tz='UTC').strftime('%Y%m%d_%H%M%S')}.json"
+    payload = {
+        "airport": "CSMI Airport (VABB)",
+        **window,
+        "latest_observation_utc": pd.Timestamp(clean_df.index.max()).strftime("%Y-%m-%d %H:%M UTC"),
+        "forecast": records,
+    }
+    with artifact_path.open("w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+    logger.info("Saved forecast artifact: %s", artifact_path)
+    return artifact_path
 
 
 @timed_step("save_plots")
@@ -1400,9 +1726,8 @@ def save_plots(
 @timed_step("run_pipeline")
 def run_pipeline(
     input_csv: str,
-    model_file: str,
-    eval_output_json: str,
-    forecast_output_json: str,
+    checkpoint_dir: str,
+    output_dir: str,
     interactive_plots: bool = False,
 ) -> None:
     set_seed(SEED)
@@ -1411,13 +1736,9 @@ def run_pipeline(
     runtime = get_gpu_runtime_params(xgb)
     logger.info(f"XGBoost GPU runtime: {runtime}")
 
-    clean_df = load_and_clean(input_csv)
+    clean_df, input_metadata = prepare_input_data(input_csv)
     logger.info("Visibility class distribution: %s", visibility_distribution(clean_df))
     validate_no_nan_inf(clean_df, [c for c in BASE_CONTINUOUS + BASE_BINARY if c in clean_df.columns], "Clean input")
-
-    wind_percentile_threshold = calibrate_wind_speed_threshold(clean_df)
-    clean_df = apply_wind_speed_limits(clean_df, wind_percentile_threshold)
-    logger.info("Applied wind speed hard cap and train-based percentile clipping before feature engineering.")
 
     stages = [
         StageConfig(
@@ -1495,10 +1816,12 @@ def run_pipeline(
 
     accepted_feature_cols = accepted_bundle["feature_columns"]
     accepted_preds = predict(accepted_bundle["models"], accepted_test_df[accepted_feature_cols])
+    gate_passed = check_accuracy_gate(accepted_metrics)
 
     eval_metrics = {
         "final_stage": accepted_stage_name,
         "final_metrics": accepted_metrics,
+        "gate_passed": gate_passed,
         "comparison_rows": comparison_rows,
         "comparison_table": format_comparison_table(comparison_rows),
         "low_visibility_rows": low_visibility_rows,
@@ -1523,21 +1846,44 @@ def run_pipeline(
             },
         }
 
-    model_bundle_path = Path(model_file)
-    model_bundle_path.parent.mkdir(parents=True, exist_ok=True)
-    joblib.dump(accepted_bundle, model_bundle_path)
-
-    eval_path = Path(eval_output_json)
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    eval_path = output_path / "eval_metrics.json"
     eval_path.parent.mkdir(parents=True, exist_ok=True)
     with eval_path.open("w", encoding="utf-8") as f:
         json.dump(eval_metrics, f, indent=2)
 
-    save_forecast_json(accepted_test_df.index, accepted_preds, forecast_output_json)
+    metadata = {
+        "trained_at_utc": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M:%S UTC"),
+        "data_range": {
+            "start": pd.Timestamp(clean_df.index.min()).isoformat(),
+            "end": pd.Timestamp(clean_df.index.max()).isoformat(),
+        },
+        "split_boundaries": {
+            "train_start": TRAIN_START,
+            "train_end": TRAIN_END,
+            "validation_end": VAL_END,
+            "test_end": TEST_END,
+        },
+        "selected_stage": accepted_stage_name,
+        "stage_config": accepted_bundle["stage_config"],
+        "target_columns": TARGET_COLUMNS,
+        "operational_targets": OPERATIONAL_TARGET_ORDER,
+        "event_feature_columns": accepted_bundle.get("event_feature_columns", []),
+        "validation_metrics": accepted_bundle["validation_metrics"],
+        "test_metrics": accepted_metrics,
+        "gate_threshold_r2": 0.90,
+        "gate_passed": gate_passed,
+        "forecast_method": "Last 12 half-hour feature rows, each predicting its timestamp plus 6 hours.",
+        **input_metadata,
+    }
+    save_training_checkpoints(accepted_bundle, checkpoint_dir, metadata)
+
     plot_files = save_plots(
         accepted_test_df.index,
         accepted_test_df,
         accepted_preds,
-        plots_dir="artifacts/plots",
+        plots_dir=str(output_path / "plots"),
         metrics=accepted_metrics,
         interactive=interactive_plots,
     )
@@ -1550,10 +1896,10 @@ def run_pipeline(
         },
         "num_models": int(len(accepted_bundle["models"])),
         "final_stage": accepted_stage_name,
-        "model_file": str(model_bundle_path),
+        "checkpoint_dir": str(Path(checkpoint_dir)),
         "eval_output": str(eval_path),
-        "forecast_output": str(Path(forecast_output_json)),
-        "plots_dir": None if interactive_plots else "artifacts/plots",
+        "gate_passed": gate_passed,
+        "plots_dir": None if interactive_plots else str(output_path / "plots"),
         "plot_files": plot_files,
         "interactive_plots": bool(interactive_plots),
     }
@@ -1572,50 +1918,10 @@ def run_pipeline(
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Stable and efficient CSMI weather forecasting pipeline.")
-    parser.add_argument("--input", default="clean_weather_data.csv", help="Input CSV path with weather observations.")
-    parser.add_argument(
-        "--run-regime-model",
-        action="store_true",
-        help="Run the two-model regime-based visibility pipeline instead of the standard multi-target pipeline.",
-    )
-    parser.add_argument(
-        "--regime-threshold",
-        type=float,
-        default=0.1,
-        help="Event-probability threshold used to switch to the severe model.",
-    )
-    parser.add_argument(
-        "--regime-severe-threshold",
-        type=float,
-        default=3000.0,
-        help="Visibility threshold used to define the severe training subset.",
-    )
-    parser.add_argument(
-        "--regime-augment-repeats",
-        type=int,
-        default=6,
-        help="How many times to repeat severe rows during augmentation.",
-    )
-    parser.add_argument(
-        "--regime-output-json",
-        default="artifacts/advanced/regime_visibility_results.json",
-        help="Optional JSON output path for regime pipeline predictions and metrics.",
-    )
-    parser.add_argument(
-        "--model-file",
-        default="artifacts/advanced/stable_models.joblib",
-        help="Single artifact file containing trained models and metadata.",
-    )
-    parser.add_argument(
-        "--eval-output",
-        default="artifacts/advanced/eval_metrics_stable.json",
-        help="Evaluation metrics output JSON path.",
-    )
-    parser.add_argument(
-        "--forecast-output",
-        default="artifacts/advanced/forecast_stable.json",
-        help="Forecast output JSON path.",
-    )
+    parser.add_argument("--mode", choices=["train", "forecast"], default="train", help="Pipeline operating mode.")
+    parser.add_argument("--input", default="data/clean_weather_data.csv", help="Input CSV path with weather observations.")
+    parser.add_argument("--checkpoint", default="checkpoints/", help="Directory for model checkpoints.")
+    parser.add_argument("--output", default="artifacts/", help="Directory for metrics, plots, and forecasts.")
     parser.add_argument(
         "--interactive-plots",
         action="store_true",
@@ -1626,22 +1932,18 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    if args.run_regime_model:
-        clean_df = load_and_clean(args.input)
-        run_regime_model_pipeline(
-            clean_df,
-            regime_threshold=args.regime_threshold,
-            severe_train_threshold=args.regime_severe_threshold,
-            severe_augment_repeats=args.regime_augment_repeats,
-            save_output_json=args.regime_output_json,
-        )
-    else:
+    if args.mode == "train":
         run_pipeline(
             input_csv=args.input,
-            model_file=args.model_file,
-            eval_output_json=args.eval_output,
-            forecast_output_json=args.forecast_output,
+            checkpoint_dir=args.checkpoint,
+            output_dir=args.output,
             interactive_plots=args.interactive_plots,
+        )
+    else:
+        run_forecast(
+            input_csv=args.input,
+            checkpoint_dir=args.checkpoint,
+            output_dir=args.output,
         )
 
 
