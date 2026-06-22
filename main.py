@@ -95,9 +95,7 @@ def timed_step(name: str):
             elapsed = time.time() - start
             logger.info(f"END: {name} | Took {elapsed:.2f}s")
             return result
-
         return wrapper
-
     return decorator
 
 
@@ -110,13 +108,10 @@ def import_xgboost():
 
 
 def get_gpu_runtime_params(xgb_module) -> Dict[str, object]:
-    # Strict GPU config for Colab T4 / CUDA-enabled runtime.
     params = {
         "tree_method": "hist",
         "device": "cuda",
     }
-
-    # Quick runtime probe so failures happen early and clearly.
     probe = xgb_module.XGBRegressor(
         objective="reg:squarederror",
         n_estimators=1,
@@ -157,7 +152,6 @@ def encode_weather_codes(df: pd.DataFrame) -> pd.DataFrame:
     for col, pattern in patterns.items():
         df[col] = codes.str.contains(pattern, regex=True, na=False).astype("int8")
 
-    # Keep required binary columns numeric and aligned with weather codes.
     df["is_haze"] = df.get("is_haze", 0)
     df["is_haze"] = pd.to_numeric(df["is_haze"], errors="coerce").fillna(0).astype("int8")
     df["is_haze"] = np.maximum(df["is_haze"].to_numpy(dtype=np.int8), df["is_haze_code"].to_numpy(dtype=np.int8))
@@ -186,7 +180,6 @@ def calibrate_wind_speed_threshold(clean_df: pd.DataFrame) -> float:
     train_start = pd.Timestamp("2016-01-01")
     train_end = pd.Timestamp(TRAIN_END)
     train_df = clean_df.loc[(clean_df.index >= train_start) & (clean_df.index < train_end)]
-    # Fallback to the full dataset if the train slice is unexpectedly empty.
     source = train_df if not train_df.empty else clean_df
     threshold = float(np.nanpercentile(source["wind_speed"].to_numpy(dtype=np.float64), 99.9))
     threshold = min(45.0, threshold)
@@ -213,7 +206,7 @@ def visibility_distribution(df: pd.DataFrame) -> Dict[str, int]:
 
 @timed_step("load_and_clean")
 def load_and_clean(input_csv: str) -> pd.DataFrame:
-    raw_df = pd.read_csv("clean_weather_data.csv")
+    raw_df = pd.read_csv(input_csv)
     raw_rows = len(raw_df)
     df = _ensure_datetime_index(raw_df)
     cleaned_rows = len(df)
@@ -224,7 +217,6 @@ def load_and_clean(input_csv: str) -> pd.DataFrame:
 
     interpolated_values = 0
 
-    # Remove physically unrealistic 30-minute jumps before interpolation.
     if "pressure" in df.columns:
         df["pressure"] = pd.to_numeric(df["pressure"], errors="coerce")
         pressure_jump_mask = df["pressure"].diff().abs() > 10.0
@@ -251,17 +243,12 @@ def load_and_clean(input_csv: str) -> pd.DataFrame:
             df[col] = pd.to_numeric(df[col], errors="coerce")
             df[col] = df[col].ffill(limit=2).bfill(limit=2).clip(0, 1)
 
-    # Final bounded fill for short gaps.
     df = df.ffill(limit=4).bfill(limit=2)
-
-    # Encode weather codes into numeric indicators and preserve compatibility columns.
     df = encode_weather_codes(df)
 
-    # Ensure hard cap remains in place after any filling.
     if "wind_speed" in df.columns:
         df["wind_speed"] = pd.to_numeric(df["wind_speed"], errors="coerce").clip(upper=45.0)
 
-    # Finish with a full numeric fill so training inputs contain no missing values.
     numeric_cols = df.select_dtypes(include=[np.number]).columns
     if len(numeric_cols) > 0:
         df[numeric_cols] = df[numeric_cols].ffill().bfill()
@@ -273,6 +260,11 @@ def load_and_clean(input_csv: str) -> pd.DataFrame:
             logger.info(f"Sanity {col}: min={float(df[col].min()):.3f}, max={float(df[col].max()):.3f}")
     logger.info(f"NaNs after load_and_clean: {int(df.isna().sum().sum())}")
 
+    # Derive engineered signals for add_features optional pickup
+    df["temp_dew_diff"] = (df["temp"] - df["dew_point"]).clip(-30.0, 60.0)
+    df["pressure_change"] = df["pressure"].diff().clip(-20.0, 20.0).fillna(0.0)
+    df["wind_speed_change"] = df["wind_speed"].diff().clip(-40.0, 40.0).fillna(0.0)
+
     return df
 
 
@@ -283,7 +275,6 @@ def add_features(
 ) -> pd.DataFrame:
     df = _ensure_datetime_index(df).copy()
 
-    # Stable cyclical encodings.
     df["wind_dir_sin"] = np.sin(np.radians(df["wind_dir"]))
     df["wind_dir_cos"] = np.cos(np.radians(df["wind_dir"]))
     df["hour_sin"] = np.sin(2 * np.pi * df.index.hour / 24.0)
@@ -291,6 +282,7 @@ def add_features(
     df["month_sin"] = np.sin(2 * np.pi * df.index.month / 12.0)
     df["month_cos"] = np.cos(2 * np.pi * df.index.month / 12.0)
 
+    # Only include columns that are guaranteed to exist
     stable_cols = [
         "temp",
         "wind_speed",
@@ -299,6 +291,10 @@ def add_features(
         "humidity",
         "wind_dir_sin",
         "wind_dir_cos",
+    ]
+
+    # Add optional columns only if they exist in the dataframe
+    for optional_col in [
         "temp_dew_diff",
         "pressure_change",
         "wind_speed_change",
@@ -307,73 +303,79 @@ def add_features(
         "is_smoke",
         "is_rain_code",
         "is_thunderstorm",
-    ]
-
-    # Reuse engineered signals from dataset when available.
-    for optional_col in ["temp_dew_diff", "pressure_change", "wind_speed_change"]:
+    ]:
         if optional_col in df.columns:
             stable_cols.append(optional_col)
 
-    # Core interactions for moist instability and advection effects.
+    # Core interactions
     df["humidity_wind"] = (df["humidity"] * df["wind_speed"]).clip(0.0, 8000.0)
     df["pressure_humidity"] = (df["pressure"] * df["humidity"]).clip(0.0, 120000.0)
     df["temp_humidity"] = (df["temp"] * df["humidity"]).clip(-1000.0, 6000.0)
-
-    # Visibility-specific interaction terms used for low-visibility prediction.
     df["humidity_temperature"] = (df["humidity"] * df["temp"]).clip(-1000.0, 6000.0)
 
-    # Always compute visibility dynamics for trend-collapse awareness.
     vis_trend = df["visibility"] - df["visibility"].shift(1)
     df["visibility_trend"] = vis_trend.clip(-5000.0, 5000.0).astype("float32")
     vis_acc = vis_trend - vis_trend.shift(1)
     df["visibility_acceleration"] = vis_acc.clip(-5000.0, 5000.0).astype("float32")
 
-    # Keep only limited lag and rolling mean features (no std/acceleration/poly trends).
+    # Build all new columns in a dict first to avoid fragmentation
+    new_cols: Dict[str, pd.Series] = {}
+
     for col in stable_cols:
         for step in LAG_STEPS:
-            df[f"{col}_lag_{step}"] = df[col].shift(step)
+            new_cols[f"{col}_lag_{step}"] = df[col].shift(step)
         for window in ROLLING_MEAN_WINDOWS:
-            df[f"{col}_rolling_mean_{window}"] = df[col].rolling(window).mean()
+            new_cols[f"{col}_rolling_mean_{window}"] = df[col].rolling(window).mean()
         for window in ROLLING_STD_WINDOWS:
-            df[f"{col}_rolling_std_{window}"] = df[col].rolling(window).std()
+            new_cols[f"{col}_rolling_std_{window}"] = df[col].rolling(window).std()
 
-    # Explicit visibility history features for forecast stability.
-    df["visibility_lag_1"] = df["visibility"].shift(1)
-    df["visibility_lag_3"] = df["visibility"].shift(3)
-    df["visibility_lag_6"] = df["visibility"].shift(6)
-    df["visibility_rolling_mean_3"] = df["visibility"].rolling(3).mean()
-    df["visibility_rolling_mean_6"] = df["visibility"].rolling(6).mean()
-    df["visibility_rolling_mean_12"] = df["visibility"].rolling(12).mean()
-    df["visibility_rolling_std_3"] = df["visibility"].rolling(3).std()
-    df["visibility_rolling_std_6"] = df["visibility"].rolling(6).std()
-    df["visibility_rolling_std_12"] = df["visibility"].rolling(12).std()
-    df["wind_speed_x_visibility_lag_1"] = df["wind_speed"] * df["visibility_lag_1"]
-    df["wind_speed_x_visibility_lag_3"] = df["wind_speed"] * df["visibility_lag_3"]
-    df["wind_speed_x_visibility_lag_6"] = df["wind_speed"] * df["visibility_lag_6"]
+    # Explicit visibility history features
+    new_cols["visibility_lag_1"] = df["visibility"].shift(1)
+    new_cols["visibility_lag_3"] = df["visibility"].shift(3)
+    new_cols["visibility_lag_6"] = df["visibility"].shift(6)
+    new_cols["visibility_rolling_mean_3"] = df["visibility"].rolling(3).mean()
+    new_cols["visibility_rolling_mean_6"] = df["visibility"].rolling(6).mean()
+    new_cols["visibility_rolling_mean_12"] = df["visibility"].rolling(12).mean()
+    new_cols["visibility_rolling_std_3"] = df["visibility"].rolling(3).std()
+    new_cols["visibility_rolling_std_6"] = df["visibility"].rolling(6).std()
+    new_cols["visibility_rolling_std_12"] = df["visibility"].rolling(12).std()
 
-    # Dynamic visibility signals for early severe-condition detection.
-    df["vis_drop_1"] = df["visibility"] - df["visibility_lag_1"]
-    df["vis_drop_3"] = df["visibility"] - df["visibility_lag_3"]
-    df["vis_drop_rate"] = df["vis_drop_1"] / (df["visibility_lag_1"] + 1.0)
-    df["high_humidity_flag"] = (df["humidity"] > 90.0).astype("float32")
-    df["humidity_spike"] = df["humidity"] - df["humidity"].shift(3)
-    df["low_wind_flag"] = (df["wind_speed"] < 2.0).astype("float32")
-    df["dew_gap"] = np.abs(df["temp"] - df["dew_point"])
-    df["dew_gap_lag_3"] = df["dew_gap"].shift(3)
-    df["dew_gap_change"] = df["dew_gap"] - df["dew_gap_lag_3"]
-    df["pressure_drop_fast"] = df["pressure"] - df["pressure"].shift(3)
+    vis_lag_1 = df["visibility"].shift(1)
+    vis_lag_3 = df["visibility"].shift(3)
+    vis_lag_6 = df["visibility"].shift(6)
+    new_cols["wind_speed_x_visibility_lag_1"] = df["wind_speed"] * vis_lag_1
+    new_cols["wind_speed_x_visibility_lag_3"] = df["wind_speed"] * vis_lag_3
+    new_cols["wind_speed_x_visibility_lag_6"] = df["wind_speed"] * vis_lag_6
+
+    new_cols["vis_drop_1"] = df["visibility"] - vis_lag_1
+    new_cols["vis_drop_3"] = df["visibility"] - vis_lag_3
+    new_cols["vis_drop_rate"] = new_cols["vis_drop_1"] / (vis_lag_1 + 1.0)
+    new_cols["high_humidity_flag"] = (df["humidity"] > 90.0).astype("float32")
+    new_cols["humidity_spike"] = df["humidity"] - df["humidity"].shift(3)
+    new_cols["low_wind_flag"] = (df["wind_speed"] < 2.0).astype("float32")
+
+    if "dew_point" in df.columns:
+        dew_gap = np.abs(df["temp"] - df["dew_point"])
+        new_cols["dew_gap"] = dew_gap
+        new_cols["dew_gap_lag_3"] = dew_gap.shift(3)
+        new_cols["dew_gap_change"] = dew_gap - dew_gap.shift(3)
+
+    new_cols["pressure_drop_fast"] = df["pressure"] - df["pressure"].shift(3)
+
+    # Concat all new columns at once to avoid fragmentation
+    df = pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
 
     if add_enhanced_signals:
         hour = df.index.hour
+        enhanced_cols: Dict[str, pd.Series] = {}
 
-        # A) Dew proximity / near-dew fog signal.
-        dew_proximity = np.abs(df["temp"] - df["dew_point"])
-        df["dew_proximity"] = dew_proximity.clip(0.0, 30.0).astype("float32")
-        df["near_dew_flag"] = (dew_proximity < 2.0).astype("float32")
+        if "dew_point" in df.columns:
+            dew_proximity = np.abs(df["temp"] - df["dew_point"])
+            enhanced_cols["dew_proximity"] = dew_proximity.clip(0.0, 30.0).astype("float32")
+            enhanced_cols["near_dew_flag"] = (dew_proximity < 2.0).astype("float32")
 
-        # B) Visibility regime bins encoded as ordinal category.
         vis_bins = [0.0, 1000.0, 3000.0, 8000.0, 12000.0]
-        df["vis_regime"] = pd.cut(
+        enhanced_cols["vis_regime"] = pd.cut(
             df["visibility"],
             bins=vis_bins,
             labels=[0, 1, 2, 3],
@@ -381,21 +383,19 @@ def add_features(
             right=False,
         ).astype("float32")
 
-        # C) Visibility persistence and streak length in current low-vis run.
         low_vis = (df["visibility"] < 3000.0).astype("int32")
-        df["low_visibility_flag"] = low_vis.astype("float32")
+        enhanced_cols["low_visibility_flag"] = low_vis.astype("float32")
         group = (low_vis == 0).cumsum()
         streak = low_vis.groupby(group).cumsum().astype("float32")
-        df["low_visibility_streak"] = streak.clip(0.0, 96.0)
+        enhanced_cols["low_visibility_streak"] = streak.clip(0.0, 96.0)
 
-        # D) Pressure change over 3 hours.
-        df["pressure_change_3h"] = (df["pressure"] - df["pressure"].shift(6)).clip(-20.0, 20.0).astype("float32")
+        enhanced_cols["pressure_change_3h"] = (df["pressure"] - df["pressure"].shift(6)).clip(-20.0, 20.0).astype("float32")
 
-        # E) Morning humidity interaction (04:00-08:59).
         morning_flag = ((hour >= 4) & (hour <= 8)).astype("float32")
-        df["morning_humidity"] = (df["humidity"] * morning_flag).clip(0.0, 100.0).astype("float32")
+        enhanced_cols["morning_humidity"] = (df["humidity"] * morning_flag).clip(0.0, 100.0).astype("float32")
 
-    # Remove extreme outliers from existing engineered delta features.
+        df = pd.concat([df, pd.DataFrame(enhanced_cols, index=df.index)], axis=1)
+
     if "pressure_change" in df.columns:
         df = df[df["pressure_change"].abs() < 20.0]
     if "wind_speed_change" in df.columns:
@@ -403,7 +403,6 @@ def add_features(
 
     df = df.dropna().copy()
 
-    # Downcast to reduce memory pressure.
     float_cols = df.select_dtypes(include=["float64"]).columns
     if len(float_cols) > 0:
         df[float_cols] = df[float_cols].astype("float32")
@@ -418,7 +417,6 @@ def add_targets(df: pd.DataFrame) -> pd.DataFrame:
         df[f"{col}_target"] = df[col].shift(-HORIZON)
     df = df.dropna().copy()
 
-    # Alignment integrity check: after dropna, features and targets must be finite and aligned.
     feature_cols = get_feature_columns(df)
     validate_no_nan_inf(df, feature_cols, "Features")
     validate_no_nan_inf(df, TARGET_COLUMNS, "Targets")
@@ -438,7 +436,7 @@ def split_chronological(df: pd.DataFrame) -> DataSplits:
         raise ValueError("Chronological split generated empty partition(s).")
     return DataSplits(train=train, val=val, test=test)
 
-# created function
+
 def get_feature_columns(df: pd.DataFrame, missing_reference_df: pd.DataFrame = None) -> List[str]:
     cols = [c for c in df.columns if not c.endswith("_target")]
     numeric_cols = [c for c in cols if pd.api.types.is_numeric_dtype(df[c])]
@@ -446,16 +444,12 @@ def get_feature_columns(df: pd.DataFrame, missing_reference_df: pd.DataFrame = N
 
     selected: List[str] = []
     for c in numeric_cols:
-        # Exclude unstable sparse features before dropna reference.
         missing_ratio = float(ref_df[c].isna().mean()) if c in ref_df.columns else 0.0
         if missing_ratio > 0.30:
             continue
-
-        # Exclude near-zero variance columns.
         std_val = float(df[c].std(ddof=0))
         if not np.isfinite(std_val) or std_val < 1e-6:
             continue
-
         selected.append(c)
 
     return selected
@@ -527,7 +521,6 @@ def validate_prediction_stability(target_col: str, raw_pred: np.ndarray, clipped
         raise ValueError(f"Prediction instability for {target_col}: NaN/Inf in raw output.")
     if np.isnan(clipped_pred).any() or np.isinf(clipped_pred).any():
         raise ValueError(f"Prediction instability for {target_col}: NaN/Inf after clipping.")
-
     lo, hi = PRED_CLIP_BOUNDS[target_col]
     if (clipped_pred < lo).any() or (clipped_pred > hi).any():
         raise ValueError(f"Prediction instability for {target_col}: values outside physical bounds.")
@@ -549,8 +542,6 @@ def evaluate(y_df: pd.DataFrame, preds: Dict[str, np.ndarray]) -> Dict[str, obje
     metrics: Dict[str, object] = {}
     for target_col in TARGET_COLUMNS:
         y_true = y_df[target_col].to_numpy(dtype=np.float64)
-        print("Prediction shape:", result.output.shape)
-        print("Target shape:", result.x["decoder_target"].shape)
         y_pred = preds[target_col]
         metrics[target_col] = {
             "rmse": float(np.sqrt(mean_squared_error(y_true, y_pred))),
@@ -632,7 +623,6 @@ def train_pipeline(
         model = train_model(X_train, y_train, X_val, y_val, runtime, reg_params, sample_weight_train=sw)
         models[target_col] = model
 
-        # Log top feature importances for model explainability/debugging.
         if hasattr(model, "feature_importances_"):
             imp = np.asarray(model.feature_importances_, dtype=np.float64)
             if imp.size == len(feature_cols):
@@ -666,7 +656,6 @@ def mean_rmse(metrics: Dict[str, object]) -> float:
 
 
 def focus_r2(metrics: Dict[str, object]) -> float:
-    # Focus metric requested by user: visibility + wind speed.
     return float(
         np.mean(
             [
@@ -731,7 +720,6 @@ def attach_event_probability_features(
     feature_reference_df: pd.DataFrame,
     event_threshold: float = 1000.0,
 ) -> Tuple[DataSplits, object, List[str]]:
-    """Train the event classifier and add probability-based regime features to each split."""
     y_train_event = (split.train["visibility_target"] < event_threshold).astype(int)
     y_val_event = (split.val["visibility_target"] < event_threshold).astype(int)
 
@@ -775,7 +763,6 @@ def augment_severe_data(
     repeats: int = 8,
     seed: int = SEED,
 ) -> Tuple[pd.DataFrame, pd.Series]:
-    """Duplicate severe rows with small perturbations on continuous fields only."""
     if X.empty:
         return X.copy(), y.copy()
 
@@ -888,12 +875,12 @@ def predict_with_regime_switch(
     threshold: float = 0.1,
     event_prob_col: str = "low_visibility_event_prob",
     return_mask: bool = False,
-) -> Tuple[np.ndarray, np.ndarray] | np.ndarray:
+) -> Tuple[np.ndarray, np.ndarray]:
     if event_prob_col not in X.columns:
         raise ValueError(f"Missing required event probability column: {event_prob_col}")
 
     event_prob = pd.to_numeric(X[event_prob_col], errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
-    vis_drop_rate = pd.to_numeric(X.get("vis_drop_rate", 0.0), errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
+    vis_drop_rate = pd.to_numeric(X.get("vis_drop_rate", pd.Series(0.0, index=X.index)), errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
     severe_mask = (event_prob > float(threshold)) | (vis_drop_rate < -0.3)
 
     general_raw = np.asarray(general_model.predict(X), dtype=np.float64)
@@ -918,7 +905,6 @@ def run_regime_model_pipeline(
     event_threshold: float = 1000.0,
     save_output_json: str = None,
 ) -> Dict[str, object]:
-    """Train a two-model visibility system and switch predictions by event probability."""
     set_seed(SEED)
     xgb = import_xgboost()
     runtime = get_gpu_runtime_params(xgb)
@@ -938,7 +924,6 @@ def run_regime_model_pipeline(
     feature_cols = get_feature_columns(split.train, missing_reference_df=feature_reference_df)
     logger.info("Regime feature count: %d", len(feature_cols))
 
-    # General model uses the full training set with visibility-focused sample weighting.
     general_X_train = split.train[feature_cols]
     general_y_train = split.train["visibility_target"]
     general_X_val = split.val[feature_cols]
@@ -962,7 +947,6 @@ def run_regime_model_pipeline(
         sample_weight_train=general_weights,
     )
 
-    # Severe model trains only on the low-visibility regime and uses augmentation instead of weighting.
     X_train_severe, y_train_severe = create_severe_dataset(split.train[feature_cols], split.train["visibility_target"], threshold=severe_train_threshold)
     X_val_severe, y_val_severe = create_severe_dataset(split.val[feature_cols], split.val["visibility_target"], threshold=severe_train_threshold)
     if X_val_severe.empty:
@@ -1100,7 +1084,6 @@ def run_regime_model_pipeline(
 
         best_severe_mae = min(ranked, key=lambda x: x["severe_mae"])
         best_severe_r2 = max(ranked, key=lambda x: x["severe_r2"])
-        # Balance rule: prefer the strongest severe MAE among thresholds with acceptable overall R2.
         acceptable = [r for r in ranked if np.isfinite(r["overall_r2"]) and r["overall_r2"] >= general_metrics["overall_r2"] - 0.02]
         if acceptable:
             best_balance = min(acceptable, key=lambda x: (x["severe_mae"], -x["severe_r2"], -x["overall_r2"]))
@@ -1186,7 +1169,6 @@ def run_regime_model_pipeline(
         },
     }
 
-    # Keep a single prediction artifact aligned to the recommended threshold.
     recommended_pred, recommended_mask = predict_with_regime_switch(
         X_test,
         general_model,
@@ -1340,14 +1322,12 @@ def save_plots(
 
     saved_files: List[str] = []
 
-    # Per-target time series and residual diagnostics.
     for base_name in CORE_TARGETS:
         target_col = f"{base_name}_target"
         actual = y_df[target_col].to_numpy(dtype=np.float64)
         predicted = preds[target_col]
         residuals = actual - predicted
 
-        # Time series plot: actual vs predicted.
         fig_ts, ax_ts = plt.subplots(figsize=(14, 4))
         ax_ts.plot(index, actual, label="Actual", linewidth=1.2)
         ax_ts.plot(index, predicted, label="Predicted", linewidth=1.2, alpha=0.85)
@@ -1365,7 +1345,6 @@ def save_plots(
             saved_files.append(str(ts_path))
             plt.close(fig_ts)
 
-        # Residual plot: line + histogram.
         fig_res, (ax_line, ax_hist) = plt.subplots(2, 1, figsize=(14, 6), sharex=False)
         ax_line.plot(index, residuals, color="tab:orange", linewidth=1.0)
         ax_line.axhline(0.0, color="black", linewidth=1.0, linestyle="--")
@@ -1389,22 +1368,18 @@ def save_plots(
             saved_files.append(str(res_path))
             plt.close(fig_res)
 
-    # Combined dashboard: 5 stacked subplots of actual vs predicted.
     fig_dash, axes = plt.subplots(len(CORE_TARGETS), 1, figsize=(16, 16), sharex=True)
     for ax, base_name in zip(axes, CORE_TARGETS):
         target_col = f"{base_name}_target"
         actual = y_df[target_col].to_numpy(dtype=np.float64)
         predicted = preds[target_col]
-        ax.plot(index, actual, label="Actual", linewidth=1.0)
-        ax.plot(index, predicted, label="Predicted", linewidth=1.0, alpha=0.85)
         m = metrics.get(target_col, {})
         rmse = m.get("rmse", float("nan"))
         mae = m.get("mae", float("nan"))
         r2 = m.get("r2", float("nan"))
-        ax.set_title(
-            f"{base_name}: Actual vs Predicted | "
-            f"RMSE={rmse:.3f}, MAE={mae:.3f}, R2={r2:.3f}"
-        )
+        ax.plot(index, actual, label="Actual", linewidth=1.0)
+        ax.plot(index, predicted, label="Predicted", linewidth=1.0, alpha=0.85)
+        ax.set_title(f"{base_name}: Actual vs Predicted | RMSE={rmse:.3f}, MAE={mae:.3f}, R2={r2:.3f}")
         ax.grid(True, alpha=0.3)
         ax.legend(loc="upper right")
     axes[-1].set_xlabel("Datetime")
@@ -1412,7 +1387,6 @@ def save_plots(
     fig_dash.tight_layout()
     if interactive:
         fig_dash.show()
-        # Block so windows remain open and fully interactive.
         plt.show()
     else:
         dash_path = out_dir / "combined_dashboard.png"
@@ -1501,7 +1475,6 @@ def run_pipeline(
             vis_summary["visibility_mae"],
         )
 
-        # Stable lexicographic ranking avoids unstable additive scores on negative R2 values.
         stage_rank = (
             vis_summary["low_visibility_r2"],
             vis_summary["severe_visibility_r2"],

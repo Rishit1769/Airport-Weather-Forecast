@@ -1,0 +1,287 @@
+{
+  "final_stage": "+PhysicsSignals",
+  "final_metrics": {
+    "temp_target": {
+      "rmse": 1.0699299068700014,
+      "mae": 0.7966984434435023,
+      "r2": 0.8264144595217897
+    },
+    "wind_speed_target": {
+      "rmse": 2.511792271440796,
+      "mae": 1.9672768241780652,
+      "r2": 0.6041428828562283
+    },
+    "visibility_target": {
+      "rmse": 479.34828213422577,
+      "mae": 331.915417691031,
+      "r2": 0.4402262532397401
+    },
+    "pressure_target": {
+      "rmse": 0.7670162483948527,
+      "mae": 0.5686606846635734,
+      "r2": 0.9630926536210108
+    },
+    "humidity_target": {
+      "rmse": 6.854675902840002,
+      "mae": 5.101379210038737,
+      "r2": 0.8749941570237059
+    },
+    "visibility_summary": {
+      "overall_r2": 0.4402262532397401,
+      "low_visibility_r2": 0.3540176784610477,
+      "severe_visibility_r2": -144.54643654467463,
+      "visibility_mae": 331.915417691031,
+      "low_visibility_mae": 321.1918825621795,
+      "severe_visibility_mae": 1747.7626697628998,
+      "low_visibility_count": 17185,
+      "severe_visibility_count": 43
+    }
+  },
+  "comparison_rows": [
+    {
+      "stage": "Baseline",
+      "target": "temp_target",
+      "rmse": 1.0745132747774138,
+      "mae": 0.7963088199867351,
+      "r2": 0.8249240618790186
+    },
+    {
+      "stage": "Baseline",
+      "target": "wind_speed_target",
+      "rmse": 2.5075989330839734,
+      "mae": 1.9627759017283575,
+      "r2": 0.6054635153230796
+    },
+    {
+      "stage": "Baseline",
+      "target": "visibility_target",
+      "rmse": 480.2290679995778,
+      "mae": 333.34813801916,
+      "r2": 0.4381672335455655
+    },
+    {
+      "stage": "Baseline",
+      "target": "pressure_target",
+      "rmse": 0.7831064007267625,
+      "mae": 0.5812126510023989,
+      "r2": 0.96152795784494
+    },
+    {
+      "stage": "Baseline",
+      "target": "humidity_target",
+      "rmse": 6.855000043475336,
+      "mae": 5.098534165764335,
+      "r2": 0.8749823343111605
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "target": "temp_target",
+      "rmse": 1.0699299068700014,
+      "mae": 0.7966984434435023,
+      "r2": 0.8264144595217897
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "target": "wind_speed_target",
+      "rmse": 2.511792271440796,
+      "mae": 1.9672768241780652,
+      "r2": 0.6041428828562283
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "target": "visibility_target",
+      "rmse": 479.34828213422577,
+      "mae": 331.915417691031,
+      "r2": 0.4402262532397401
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "target": "pressure_target",
+      "rmse": 0.7670162483948527,
+      "mae": 0.5686606846635734,
+      "r2": 0.9630926536210108
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "target": "humidity_target",
+      "rmse": 6.854675902840002,
+      "mae": 5.101379210038737,
+      "r2": 0.8749941570237059
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "target": "temp_target",
+      "rmse": 1.0782925705360946,
+      "mae": 0.8014635500473222,
+      "r2": 0.8236903361107885
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "target": "wind_speed_target",
+      "rmse": 2.4997571094962843,
+      "mae": 1.958256875698929,
+      "r2": 0.607927264876058
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "target": "visibility_target",
+      "rmse": 499.0193018326889,
+      "mae": 358.776993644981,
+      "r2": 0.3933406936398023
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "target": "pressure_target",
+      "rmse": 0.7612305665346419,
+      "mae": 0.5631240799406878,
+      "r2": 0.9636473454150852
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "target": "humidity_target",
+      "rmse": 6.858906669681211,
+      "mae": 5.102921001601224,
+      "r2": 0.8748397999702935
+    }
+  ],
+  "comparison_table": "| Stage | Target | RMSE | MAE | R2 |\n|---|---|---:|---:|---:|\n| Baseline | temp_target | 1.0745 | 0.7963 | 0.8249 |\n| Baseline | wind_speed_target | 2.5076 | 1.9628 | 0.6055 |\n| Baseline | visibility_target | 480.2291 | 333.3481 | 0.4382 |\n| Baseline | pressure_target | 0.7831 | 0.5812 | 0.9615 |\n| Baseline | humidity_target | 6.8550 | 5.0985 | 0.8750 |\n| +PhysicsSignals | temp_target | 1.0699 | 0.7967 | 0.8264 |\n| +PhysicsSignals | wind_speed_target | 2.5118 | 1.9673 | 0.6041 |\n| +PhysicsSignals | visibility_target | 479.3483 | 331.9154 | 0.4402 |\n| +PhysicsSignals | pressure_target | 0.7670 | 0.5687 | 0.9631 |\n| +PhysicsSignals | humidity_target | 6.8547 | 5.1014 | 0.8750 |\n| +EventProbAndWeightedVis | temp_target | 1.0783 | 0.8015 | 0.8237 |\n| +EventProbAndWeightedVis | wind_speed_target | 2.4998 | 1.9583 | 0.6079 |\n| +EventProbAndWeightedVis | visibility_target | 499.0193 | 358.7770 | 0.3933 |\n| +EventProbAndWeightedVis | pressure_target | 0.7612 | 0.5631 | 0.9636 |\n| +EventProbAndWeightedVis | humidity_target | 6.8589 | 5.1029 | 0.8748 |",
+  "low_visibility_rows": [
+    {
+      "stage": "Baseline",
+      "overall_r2": 0.4381672335455655,
+      "low_visibility_r2": 0.35135942587633884,
+      "severe_visibility_r2": -150.77263770999573,
+      "visibility_mae": 333.34813801916,
+      "low_visibility_mae": 322.6455863040306,
+      "severe_visibility_mae": 1791.3582905614098,
+      "low_visibility_count": 17185,
+      "severe_visibility_count": 43
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "overall_r2": 0.4402262532397401,
+      "low_visibility_r2": 0.3540176784610477,
+      "severe_visibility_r2": -144.54643654467463,
+      "visibility_mae": 331.915417691031,
+      "low_visibility_mae": 321.1918825621795,
+      "severe_visibility_mae": 1747.7626697628998,
+      "low_visibility_count": 17185,
+      "severe_visibility_count": 43
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "overall_r2": 0.3933406936398023,
+      "low_visibility_r2": 0.32281408981343296,
+      "severe_visibility_r2": -113.6584407891599,
+      "visibility_mae": 358.776993644981,
+      "low_visibility_mae": 345.10716847166407,
+      "severe_visibility_mae": 1554.6521393531978,
+      "low_visibility_count": 17185,
+      "severe_visibility_count": 43
+    }
+  ],
+  "low_visibility_table": "| Stage | Overall R2 | Low Vis R2 | Severe Vis R2 | Visibility MAE |\n|---|---:|---:|---:|---:|\n| Baseline | 0.4382 | 0.3514 | -150.7726 | 333.3481 |\n| +PhysicsSignals | 0.4402 | 0.3540 | -144.5464 | 331.9154 |\n| +EventProbAndWeightedVis | 0.3933 | 0.3228 | -113.6584 | 358.7770 |",
+  "segment_rows": [
+    {
+      "stage": "Baseline",
+      "segment": "severe",
+      "count": 43,
+      "rmse": 1822.9525195189046,
+      "mae": 1791.3582905614098,
+      "r2": -150.77263770999573
+    },
+    {
+      "stage": "Baseline",
+      "segment": "moderate",
+      "count": 7347,
+      "rmse": 468.49661239598527,
+      "mae": 316.7057254449095,
+      "r2": -1.7209751126505384
+    },
+    {
+      "stage": "Baseline",
+      "segment": "clear",
+      "count": 10118,
+      "rmse": 474.93117831638324,
+      "mae": 339.2363934672428,
+      "r2": 0.11853713208861272
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "segment": "severe",
+      "count": 43,
+      "rmse": 1785.1692800145918,
+      "mae": 1747.7626697628998,
+      "r2": -144.54643654467463
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "segment": "moderate",
+      "count": 7347,
+      "rmse": 464.81490941150577,
+      "mae": 311.7590045921167,
+      "r2": -1.6783773257635053
+    },
+    {
+      "stage": "+PhysicsSignals",
+      "segment": "clear",
+      "count": 10118,
+      "rmse": 476.62524072707964,
+      "mae": 340.5344862024594,
+      "r2": 0.11223762441554919
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "segment": "severe",
+      "count": 43,
+      "rmse": 1584.461285022985,
+      "mae": 1554.6521393531978,
+      "r2": -113.6584407891599
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "segment": "moderate",
+      "count": 7347,
+      "rmse": 346.45481588123687,
+      "mae": 222.869335934177,
+      "r2": -0.488006625178558
+    },
+    {
+      "stage": "+EventProbAndWeightedVis",
+      "segment": "clear",
+      "count": 10118,
+      "rmse": 577.1243069587338,
+      "mae": 452.3815528400615,
+      "r2": -0.3016115448241534
+    }
+  ],
+  "segment_table": "| Stage | Segment | Count | RMSE | MAE | R2 |\n|---|---|---:|---:|---:|---:|\n| Baseline | severe | 43 | 1822.9525 | 1791.3583 | -150.7726 |\n| Baseline | moderate | 7347 | 468.4966 | 316.7057 | -1.7210 |\n| Baseline | clear | 10118 | 474.9312 | 339.2364 | 0.1185 |\n| +PhysicsSignals | severe | 43 | 1785.1693 | 1747.7627 | -144.5464 |\n| +PhysicsSignals | moderate | 7347 | 464.8149 | 311.7590 | -1.6784 |\n| +PhysicsSignals | clear | 10118 | 476.6252 | 340.5345 | 0.1122 |\n| +EventProbAndWeightedVis | severe | 43 | 1584.4613 | 1554.6521 | -113.6584 |\n| +EventProbAndWeightedVis | moderate | 7347 | 346.4548 | 222.8693 | -0.4880 |\n| +EventProbAndWeightedVis | clear | 10118 | 577.1243 | 452.3816 | -0.3016 |",
+  "before_after_comparison": {
+    "baseline": {
+      "overall_r2": 0.4381672335455655,
+      "low_visibility_r2": 0.35135942587633884,
+      "severe_visibility_r2": -150.77263770999573,
+      "visibility_mae": 333.34813801916,
+      "low_visibility_mae": 322.6455863040306,
+      "severe_visibility_mae": 1791.3582905614098,
+      "low_visibility_count": 17185,
+      "severe_visibility_count": 43
+    },
+    "final": {
+      "overall_r2": 0.4402262532397401,
+      "low_visibility_r2": 0.3540176784610477,
+      "severe_visibility_r2": -144.54643654467463,
+      "visibility_mae": 331.915417691031,
+      "low_visibility_mae": 321.1918825621795,
+      "severe_visibility_mae": 1747.7626697628998,
+      "low_visibility_count": 17185,
+      "severe_visibility_count": 43
+    },
+    "delta": {
+      "overall_r2": 0.0020590196941745464,
+      "low_visibility_r2": 0.0026582525847088645,
+      "severe_visibility_r2": 6.2262011653211005,
+      "visibility_mae": -1.432720328128994
+    }
+  }
+}
