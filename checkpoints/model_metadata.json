@@ -1,5 +1,5 @@
 {
-  "trained_at_utc": "2026-06-22 17:49:44 UTC",
+  "trained_at_utc": "2026-06-22 18:18:51 UTC",
   "data_range": {
     "start": "2016-01-01T00:00:00",
     "end": "2025-12-31T23:30:00"
@@ -72,21 +72,21 @@
       "r2": 0.9666277623448759
     },
     "visibility_target": {
-      "rmse": 440.3497890676935,
-      "mae": 313.2123059583709,
-      "r2": 0.4966105121513885
+      "rmse": 429.30126704650905,
+      "mae": 302.0856660260774,
+      "r2": 0.5215540339028755
     },
     "wind_dir_summary": {
       "circular_mae_deg": 32.817156985141104,
       "circular_rmse_deg": 48.40026703209676
     },
     "visibility_summary": {
-      "overall_r2": 0.4966105121513885,
-      "low_visibility_r2": 0.45107411632173844,
-      "severe_visibility_r2": -98.67590355664792,
-      "visibility_mae": 313.2123059583709,
-      "low_visibility_mae": 308.4920830319407,
-      "severe_visibility_mae": 1580.243378795277,
+      "overall_r2": 0.5215540339028755,
+      "low_visibility_r2": 0.4774054012064447,
+      "severe_visibility_r2": -85.87008923617697,
+      "visibility_mae": 302.0856660260774,
+      "low_visibility_mae": 297.76185767272386,
+      "severe_visibility_mae": 1466.7269569374798,
       "low_visibility_count": 17424,
       "severe_visibility_count": 110
     },
@@ -109,7 +109,7 @@
         "r2": 0.9666277623448759
       },
       "visibility": {
-        "r2": 0.4966105121513885
+        "r2": 0.5215540339028755
       }
     }
   },
@@ -145,21 +145,21 @@
       "r2": 0.9633780090309852
     },
     "visibility_target": {
-      "rmse": 484.4178555597068,
-      "mae": 336.7119247579455,
-      "r2": 0.4283233403192459
+      "rmse": 483.47012785561043,
+      "mae": 333.4696774986752,
+      "r2": 0.4305580383684481
     },
     "wind_dir_summary": {
       "circular_mae_deg": 34.962113952032965,
       "circular_rmse_deg": 51.99986854504913
     },
     "visibility_summary": {
-      "overall_r2": 0.4283233403192459,
-      "low_visibility_r2": 0.33605468402482097,
-      "severe_visibility_r2": -144.65678634112183,
-      "visibility_mae": 336.7119247579455,
-      "low_visibility_mae": 326.4635989950811,
-      "severe_visibility_mae": 1746.2675951580668,
+      "overall_r2": 0.4305580383684481,
+      "low_visibility_r2": 0.3374451585183106,
+      "severe_visibility_r2": -124.48999980801493,
+      "visibility_mae": 333.4696774986752,
+      "low_visibility_mae": 323.20698706538434,
+      "severe_visibility_mae": 1612.8513255197192,
       "low_visibility_count": 17185,
       "severe_visibility_count": 43
     },
@@ -182,7 +182,7 @@
         "r2": 0.9633780090309852
       },
       "visibility": {
-        "r2": 0.4283233403192459
+        "r2": 0.4305580383684481
       }
     }
   },

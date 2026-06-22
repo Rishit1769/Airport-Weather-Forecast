@@ -602,7 +602,10 @@ def add_features(
 def add_targets(df: pd.DataFrame) -> pd.DataFrame:
     df = _ensure_datetime_index(df).copy()
     for col in CORE_TARGETS:
-        df[f"{col}_target"] = df[col].shift(-HORIZON)
+        shifted_target = df[col].shift(-HORIZON)
+        if col == "visibility":
+            shifted_target = shifted_target.clip(150.0, 10000.0)
+        df[f"{col}_target"] = shifted_target
     df = df.dropna().copy()
 
     feature_cols = get_feature_columns(df)
@@ -644,13 +647,16 @@ def get_feature_columns(df: pd.DataFrame, missing_reference_df: pd.DataFrame = N
 
 
 def build_visibility_sample_weights(y_train: pd.Series) -> Tuple[np.ndarray, Dict[str, float]]:
-    y_arr = y_train.to_numpy(dtype=np.float64)
-    weights = np.ones_like(y_arr, dtype=np.float64)
-    low_mask = (y_arr >= 1000.0) & (y_arr < 3000.0)
-    severe_mask = y_arr < 1000.0
-    weights[low_mask] = 5.0
-    weights[severe_mask] = 5.0
-    weights[y_arr > 5000.0] = 1.0
+    visibility_m = y_train.to_numpy(dtype=np.float64)
+    weights = np.ones_like(visibility_m, dtype=np.float64)
+    low_mask = (visibility_m >= 1000.0) & (visibility_m <= 5000.0)
+    severe_mask = visibility_m < 1000.0
+    weights[low_mask] = 1.2
+    weights[severe_mask] = 2.5
+    weights[visibility_m > 5000.0] = 1.0
+    excess_mean = float(np.mean(weights - 1.0))
+    if excess_mean > 0.05:
+        weights = 1.0 + (weights - 1.0) * (0.05 / excess_mean)
     weights = np.clip(weights, 1.0, 5.0)
     stats = {
         "moderate_low_count": int(low_mask.sum()),
@@ -672,6 +678,7 @@ def train_model(
     runtime: Dict[str, object],
     reg_params: Dict[str, float],
     sample_weight_train: np.ndarray = None,
+    target_col: str = None,
 ):
     xgb = import_xgboost()
     if sample_weight_train is not None:
@@ -680,6 +687,87 @@ def train_model(
             1.0,
             5.0,
         )
+
+    if target_col == "visibility_target":
+        y_class_train = (y_train < 5000.0).astype(int)
+        y_class_val = (y_val < 5000.0).astype(int)
+
+        gatekeeper = xgb.XGBClassifier(
+            objective="binary:logistic",
+            eval_metric="logloss",
+            n_estimators=1500,
+            max_depth=6,
+            learning_rate=0.03,
+            subsample=0.8,
+            colsample_bytree=0.8,
+            early_stopping_rounds=50,
+            random_state=SEED,
+            n_jobs=-1,
+            tree_method=runtime["tree_method"],
+            device=runtime["device"],
+            gamma=reg_params.get("gamma", 0.0),
+            reg_alpha=reg_params.get("reg_alpha", 0.0),
+            reg_lambda=reg_params.get("reg_lambda", 1.0),
+        )
+        gatekeeper.fit(
+            X_train,
+            y_class_train,
+            eval_set=[(X_val, y_class_val)],
+            verbose=False,
+        )
+
+        low_train_mask = y_train < 5000.0
+        low_val_mask = y_val < 5000.0
+        high_train_mask = ~low_train_mask
+        high_val_mask = ~low_val_mask
+        if not low_train_mask.any() or not high_train_mask.any():
+            raise ValueError("Visibility hurdle training requires both low- and high-visibility rows.")
+
+        low_X_val = X_val.loc[low_val_mask] if low_val_mask.any() else X_train.loc[low_train_mask]
+        low_y_val = y_val.loc[low_val_mask] if low_val_mask.any() else y_train.loc[low_train_mask]
+        high_X_val = X_val.loc[high_val_mask] if high_val_mask.any() else X_train.loc[high_train_mask]
+        high_y_val = y_val.loc[high_val_mask] if high_val_mask.any() else y_train.loc[high_train_mask]
+
+        specialist_params = {
+            "objective": "reg:squarederror",
+            "n_estimators": 1500,
+            "max_depth": 6,
+            "learning_rate": 0.03,
+            "subsample": 0.8,
+            "colsample_bytree": 0.8,
+            "early_stopping_rounds": 50,
+            "random_state": SEED,
+            "n_jobs": -1,
+            "tree_method": runtime["tree_method"],
+            "device": runtime["device"],
+            "gamma": reg_params.get("gamma", 0.0),
+            "reg_alpha": reg_params.get("reg_alpha", 0.0),
+            "reg_lambda": reg_params.get("reg_lambda", 1.0),
+        }
+        low_vis_specialist = xgb.XGBRegressor(**specialist_params)
+        high_vis_specialist = xgb.XGBRegressor(**specialist_params)
+
+        low_weights = sample_weight_train[low_train_mask.to_numpy()] if sample_weight_train is not None else None
+        high_weights = sample_weight_train[high_train_mask.to_numpy()] if sample_weight_train is not None else None
+        low_vis_specialist.fit(
+            X_train.loc[low_train_mask],
+            np.log1p(y_train.loc[low_train_mask]),
+            sample_weight=low_weights,
+            eval_set=[(low_X_val, np.log1p(low_y_val))],
+            verbose=False,
+        )
+        high_vis_specialist.fit(
+            X_train.loc[high_train_mask],
+            y_train.loc[high_train_mask],
+            sample_weight=high_weights,
+            eval_set=[(high_X_val, high_y_val)],
+            verbose=False,
+        )
+        return {
+            "gatekeeper": gatekeeper,
+            "low_vis_specialist": low_vis_specialist,
+            "high_vis_specialist": high_vis_specialist,
+        }
 
     model = xgb.XGBRegressor(
         objective="reg:squarederror",
@@ -712,6 +800,43 @@ def clip_prediction(target_col: str, pred: np.ndarray) -> np.ndarray:
     return np.clip(pred, lo, hi)
 
 
+def predict_visibility_hurdle(model_bundle: Dict[str, object], X: pd.DataFrame) -> np.ndarray:
+    prob_low = np.clip(predict_xgboost_model(model_bundle["gatekeeper"], X), 0.0, 1.0)
+    pred_low_raw = predict_xgboost_model(model_bundle["low_vis_specialist"], X)
+    pred_low = np.expm1(pred_low_raw)
+    pred_high = predict_xgboost_model(model_bundle["high_vis_specialist"], X)
+    visibility_pred = (prob_low * pred_low) + ((1.0 - prob_low) * pred_high)
+
+    is_high_vis = prob_low < 0.5
+    visibility_pred = np.where(is_high_vis & (visibility_pred >= 8500.0), 10000.0, visibility_pred)
+    visibility_pred = np.where(
+        is_high_vis & (visibility_pred >= 5500.0) & (visibility_pred < 7000.0),
+        6000.0,
+        visibility_pred,
+    )
+    visibility_pred = np.where(
+        is_high_vis & (visibility_pred >= 7000.0) & (visibility_pred < 8500.0),
+        8000.0,
+        visibility_pred,
+    )
+    return np.clip(visibility_pred, 150.0, 10000.0)
+
+
+def predict_xgboost_model(model: object, X: pd.DataFrame) -> np.ndarray:
+    xgb = import_xgboost()
+    prediction_data = xgb.DMatrix(X, enable_categorical=True)
+    best_iteration = getattr(model, "best_iteration", None)
+    iteration_range = (0, int(best_iteration) + 1) if best_iteration is not None else (0, 0)
+    return np.asarray(
+        model.get_booster().predict(
+            prediction_data,
+            iteration_range=iteration_range,
+            strict_shape=False,
+        ),
+        dtype=np.float64,
+    )
+
+
 def validate_prediction_stability(target_col: str, raw_pred: np.ndarray, clipped_pred: np.ndarray) -> None:
     if np.isnan(raw_pred).any() or np.isinf(raw_pred).any():
         raise ValueError(f"Prediction instability for {target_col}: NaN/Inf in raw output.")
@@ -726,8 +851,12 @@ def validate_prediction_stability(target_col: str, raw_pred: np.ndarray, clipped
 def predict(models: Dict[str, object], X: pd.DataFrame) -> Dict[str, np.ndarray]:
     preds: Dict[str, np.ndarray] = {}
     for target_col, model in models.items():
-        raw = np.asarray(model.predict(X), dtype=np.float64)
-        clipped = clip_prediction(target_col, raw)
+        if target_col == "visibility_target":
+            clipped = predict_visibility_hurdle(model, X)
+            raw = clipped
+        else:
+            raw = predict_xgboost_model(model, X)
+            clipped = clip_prediction(target_col, raw)
         validate_prediction_stability(target_col, raw, clipped)
         preds[target_col] = clipped
     return preds
@@ -832,7 +961,16 @@ def train_pipeline(
                 sw_stats["weight_max"],
                 sw_stats["weight_mean"],
             )
-        model = train_model(X_train, y_train, X_val, y_val, runtime, reg_params, sample_weight_train=sw)
+        model = train_model(
+            X_train,
+            y_train,
+            X_val,
+            y_val,
+            runtime,
+            reg_params,
+            sample_weight_train=sw,
+            target_col=target_col,
+        )
         models[target_col] = model
 
         if hasattr(model, "feature_importances_"):
@@ -932,8 +1070,10 @@ def attach_event_probability_features(
     feature_reference_df: pd.DataFrame,
     event_threshold: float = 1000.0,
 ) -> Tuple[DataSplits, object, List[str]]:
-    y_train_event = (split.train["visibility_target"] < event_threshold).astype(int)
-    y_val_event = (split.val["visibility_target"] < event_threshold).astype(int)
+    y_train_visibility = split.train["visibility_target"]
+    y_val_visibility = split.val["visibility_target"]
+    y_train_event = (y_train_visibility < event_threshold).astype(int)
+    y_val_event = (y_val_visibility < event_threshold).astype(int)
 
     base_feature_cols = get_feature_columns(split.train, missing_reference_df=feature_reference_df)
     event_clf = train_event_classifier(
@@ -950,7 +1090,7 @@ def attach_event_probability_features(
 
     for part in [updated_train, updated_val, updated_test]:
         event_prob_feature = np.clip(
-            event_clf.predict_proba(part[base_feature_cols])[:, 1],
+            predict_xgboost_model(event_clf, part[base_feature_cols]),
             0.0,
             1.0,
         )
@@ -970,7 +1110,8 @@ def create_severe_dataset(
     y: pd.Series,
     threshold: float = 3000.0,
 ) -> Tuple[pd.DataFrame, pd.Series]:
-    severe_mask = y.to_numpy(dtype=np.float64) < float(threshold)
+    visibility_m = y.to_numpy(dtype=np.float64)
+    severe_mask = visibility_m < float(threshold)
     return X.loc[severe_mask].copy(), y.loc[severe_mask].copy()
 
 
@@ -1100,13 +1241,10 @@ def predict_with_regime_switch(
     vis_drop_rate = pd.to_numeric(X.get("vis_drop_rate", pd.Series(0.0, index=X.index)), errors="coerce").fillna(0.0).to_numpy(dtype=np.float64)
     severe_mask = (event_prob > float(threshold)) | (vis_drop_rate < -0.3)
 
-    general_raw = np.asarray(general_model.predict(X), dtype=np.float64)
-    severe_raw = np.asarray(severe_model.predict(X), dtype=np.float64)
-
-    general_pred = clip_prediction("visibility_target", general_raw)
-    severe_pred = clip_prediction("visibility_target", severe_raw)
-    validate_prediction_stability("visibility_target", general_raw, general_pred)
-    validate_prediction_stability("visibility_target", severe_raw, severe_pred)
+    general_pred = predict_visibility_hurdle(general_model, X)
+    severe_pred = predict_visibility_hurdle(severe_model, X)
+    validate_prediction_stability("visibility_target", general_pred, general_pred)
+    validate_prediction_stability("visibility_target", severe_pred, severe_pred)
 
     final_pred = np.where(severe_mask, severe_pred, general_pred)
     if return_mask:
@@ -1162,6 +1300,7 @@ def run_regime_model_pipeline(
         runtime,
         {"gamma": 0.0, "reg_alpha": 0.0, "reg_lambda": 1.0},
         sample_weight_train=general_weights,
+        target_col="visibility_target",
     )
 
     X_train_severe, y_train_severe = create_severe_dataset(split.train[feature_cols], split.train["visibility_target"], threshold=severe_train_threshold)
@@ -1206,6 +1345,7 @@ def run_regime_model_pipeline(
         runtime,
         {"gamma": 0.0, "reg_alpha": 0.0, "reg_lambda": 1.0},
         sample_weight_train=severe_weights,
+        target_col="visibility_target",
     )
 
     X_test = split.test[feature_cols]
@@ -1234,7 +1374,7 @@ def run_regime_model_pipeline(
         int((split.train["visibility_target"] < severe_train_threshold).sum()),
     )
 
-    general_pred = clip_prediction("visibility_target", np.asarray(general_model.predict(X_test), dtype=np.float64))
+    general_pred = predict_visibility_hurdle(general_model, X_test)
     y_test = split.test["visibility_target"]
     general_metrics = evaluate_visibility_predictions(y_test, general_pred)
 
@@ -1530,7 +1670,7 @@ def add_event_probability_features_for_inference(
 ) -> pd.DataFrame:
     enriched = feature_df.copy()
     event_X = align_feature_frame(enriched, event_feature_columns)
-    event_prob_feature = np.clip(event_classifier.predict_proba(event_X)[:, 1], 0.0, 1.0)
+    event_prob_feature = np.clip(predict_xgboost_model(event_classifier, event_X), 0.0, 1.0)
     enriched["low_visibility_event_prob"] = (event_prob_feature * 0.3).astype("float32")
     enriched["low_vis_humidity"] = (enriched["low_visibility_event_prob"] * enriched["humidity"]).astype("float32")
     if "dew_proximity" in enriched.columns:
