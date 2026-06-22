@@ -65,12 +65,7 @@ def train_and_predict(df_master: pd.DataFrame):
     if train_df.empty or test_df.empty:
         raise ValueError("Visibility chronological split generated an empty partition.")
 
-    min_vis = 150.0
-    max_vis = 10000.0
-    epsilon = 1e-4
-    y_train_scaled = (train_df["visibility"] - min_vis) / (max_vis - min_vis)
-    y_train_scaled = np.clip(y_train_scaled, epsilon, 1.0 - epsilon)
-    y_train_logit = np.log(y_train_scaled / (1.0 - y_train_scaled))
+    y_train_extinction = 10000.0 / train_df["visibility"]
     y_test_abs = test_df["visibility"]
 
     unsafe_visibility_features = {
@@ -121,11 +116,11 @@ def train_and_predict(df_master: pd.DataFrame):
     X_test = test_df[features]
 
     model = XGBRegressor(
-        n_estimators=1500,
+        n_estimators=1800,
         learning_rate=0.015,
-        max_depth=8,
-        gamma=0.5,
-        reg_lambda=2.0,
+        max_depth=7,
+        gamma=0.2,
+        reg_lambda=1.0,
         subsample=0.85,
         colsample_bytree=0.85,
         tree_method="hist",
@@ -135,16 +130,16 @@ def train_and_predict(df_master: pd.DataFrame):
         n_jobs=-1,
     )
 
-    print("      -> Fitting Visibility Specialist (Logit Space)...")
-    model.fit(X_train, y_train_logit, verbose=False)
+    print("      -> Fitting Visibility Specialist (Extinction Space)...")
+    model.fit(X_train, y_train_extinction, verbose=False)
 
-    preds_logit = model.get_booster().predict(
+    preds_extinction = model.get_booster().predict(
         xgb.DMatrix(X_test, enable_categorical=True),
         strict_shape=False,
     )
-    preds_scaled = 1.0 / (1.0 + np.exp(-np.clip(preds_logit, -50.0, 50.0)))
-    preds_abs = (preds_scaled * (max_vis - min_vis)) + min_vis
-    preds_abs = np.clip(preds_abs, min_vis, max_vis)
+    safe_extinction = np.maximum(preds_extinction, 1e-6)
+    preds_abs = 10000.0 / safe_extinction
+    preds_abs = np.clip(preds_abs, 150.0, 10000.0)
 
     r2 = float(r2_score(y_test_abs, preds_abs))
     rmse = float(np.sqrt(mean_squared_error(y_test_abs, preds_abs)))
