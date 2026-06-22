@@ -24,23 +24,23 @@ def add_vis_features(df: pd.DataFrame) -> pd.DataFrame:
 
     vis_df["dew_depression"] = vis_df["temp_lag_1"] - dew_point
     vis_df["dew_dep_squared"] = np.square(vis_df["dew_depression"])
-    vis_df["temp_cooling_rate"] = vis_df["temp_lag_1"] - vis_df["temp_lag_3"]
-    vis_df["vis_volatility_3h"] = vis_df["vis_lag_1"].rolling(6).std().fillna(0.0)
 
     if "wind_speed" in vis_df.columns:
         vis_df["wind_lag_1"] = vis_df["wind_speed"].shift(1)
-    if "wind_speed" in vis_df.columns and "pressure" in vis_df.columns:
-        vis_df["stagnation_index"] = vis_df["pressure"].shift(1) / (
-            vis_df["wind_speed"].shift(1) + 1.0
-        )
+    vis_df["vis_volatility_3h"] = vis_df["vis_lag_1"].rolling(6).std().fillna(0.0)
 
     if "datetime" in vis_df.columns:
         datetime_values = pd.to_datetime(vis_df["datetime"])
     else:
         datetime_values = vis_df.index
-    vis_df["is_fog_time"] = (
-        (datetime_values.hour >= 2) & (datetime_values.hour <= 8)
-    ).astype(int)
+    hour_float = datetime_values.hour + (datetime_values.minute / 60.0)
+    solar_intensity = np.maximum(
+        0.0,
+        np.sin(2.0 * np.pi * (hour_float - 6.0) / 24.0),
+    )
+    vis_df["solar_accumulation_4h"] = (
+        pd.Series(solar_intensity, index=vis_df.index).rolling(8).sum().fillna(0.0)
+    )
 
     return vis_df.dropna(subset=["vis_lag_1", "temp_lag_3"])
 
@@ -65,7 +65,12 @@ def train_and_predict(df_master: pd.DataFrame):
     if train_df.empty or test_df.empty:
         raise ValueError("Visibility chronological split generated an empty partition.")
 
-    y_train_delta = np.sqrt(train_df["visibility"]) - np.sqrt(train_df["vis_lag_1"])
+    min_vis = 150.0
+    max_vis = 10000.0
+    epsilon = 1e-4
+    y_train_scaled = (train_df["visibility"] - min_vis) / (max_vis - min_vis)
+    y_train_scaled = np.clip(y_train_scaled, epsilon, 1.0 - epsilon)
+    y_train_logit = np.log(y_train_scaled / (1.0 - y_train_scaled))
     y_test_abs = test_df["visibility"]
 
     unsafe_visibility_features = {
@@ -103,11 +108,9 @@ def train_and_predict(df_master: pd.DataFrame):
                 "month_cos",
                 "dew_depression",
                 "dew_dep_squared",
-                "temp_cooling_rate",
                 "vis_volatility_3h",
-                "stagnation_index",
                 "wind_lag_1",
-                "is_fog_time",
+                "solar_accumulation_4h",
             }
         )
     ]
@@ -121,27 +124,27 @@ def train_and_predict(df_master: pd.DataFrame):
         n_estimators=1500,
         learning_rate=0.015,
         max_depth=8,
-        gamma=0.1,
-        reg_lambda=1.0,
+        gamma=0.5,
+        reg_lambda=2.0,
         subsample=0.85,
         colsample_bytree=0.85,
         tree_method="hist",
         device="cuda",
-        objective="reg:pseudohubererror",
-        huber_slope=1.0,
+        objective="reg:squarederror",
         random_state=42,
         n_jobs=-1,
     )
 
-    print("      -> Fitting Visibility Specialist (Delta-Sqrt)...")
-    model.fit(X_train, y_train_delta, verbose=False)
+    print("      -> Fitting Visibility Specialist (Logit Space)...")
+    model.fit(X_train, y_train_logit, verbose=False)
 
-    preds_delta = model.get_booster().predict(
+    preds_logit = model.get_booster().predict(
         xgb.DMatrix(X_test, enable_categorical=True),
         strict_shape=False,
     )
-    sqrt_vis_pred = np.sqrt(test_df["vis_lag_1"].to_numpy(dtype=np.float64)) + preds_delta
-    preds_abs = np.clip(np.square(sqrt_vis_pred), 150.0, 10000.0)
+    preds_scaled = 1.0 / (1.0 + np.exp(-np.clip(preds_logit, -50.0, 50.0)))
+    preds_abs = (preds_scaled * (max_vis - min_vis)) + min_vis
+    preds_abs = np.clip(preds_abs, min_vis, max_vis)
 
     r2 = float(r2_score(y_test_abs, preds_abs))
     rmse = float(np.sqrt(mean_squared_error(y_test_abs, preds_abs)))
