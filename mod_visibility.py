@@ -5,10 +5,8 @@ import numpy as np
 import pandas as pd
 import xgboost as xgb
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from xgboost import XGBClassifier, XGBRegressor
-
-REGIME_NAMES = ["DENSE_FOG", "MODERATE_FOG", "HAZE", "CLEAR"]
-
+from sklearn.model_selection import train_test_split
+from xgboost import XGBRegressor
 
 def _save_bundle_atomic(bundle: dict, destination: Path) -> None:
     temporary = destination.with_suffix(destination.suffix + ".tmp")
@@ -18,15 +16,6 @@ def _save_bundle_atomic(bundle: dict, destination: Path) -> None:
     finally:
         if temporary.exists():
             temporary.unlink()
-
-
-def _regime_labels(visibility: pd.Series) -> np.ndarray:
-    values = visibility.to_numpy(dtype=np.float64)
-    return np.select(
-        [values < 200.0, values < 1000.0, values <= 4000.0],
-        [0, 1, 2],
-        default=3,
-    ).astype(np.int32)
 
 
 def _predict_xgb(model, features: pd.DataFrame) -> np.ndarray:
@@ -147,212 +136,116 @@ def _flatline_exclusion_mask(visibility: pd.Series) -> pd.Series:
     return flatline | recovery
 
 
-def _feature_columns(df: pd.DataFrame) -> list[str]:
-    unsafe = {
-        "visibility",
+def train_and_predict(df_master: pd.DataFrame):
+    vis_df = add_vis_features(df_master)
+    exclusion_mask = _flatline_exclusion_mask(vis_df["visibility"])
+    total_removed = int(exclusion_mask.sum())
+    removed_pct = 100.0 * total_removed / len(vis_df)
+    vis_df = vis_df.loc[~exclusion_mask].copy()
+    print(
+        f"      -> Flatline rows removed before split: {total_removed} "
+        f"({removed_pct:.2f}%)"
+    )
+
+    conditions = [
+        vis_df["visibility"] <= 500.0,
+        (vis_df["visibility"] > 500.0) & (vis_df["visibility"] <= 2000.0),
+        vis_df["visibility"] > 2000.0,
+    ]
+    vis_df["split_regime"] = np.select(conditions, [0, 1, 2], default=2).astype("int8")
+
+    train_df, test_df = train_test_split(
+        vis_df,
+        test_size=0.15,
+        stratify=vis_df["split_regime"],
+        random_state=42,
+    )
+    train_df = train_df.sort_index()
+    test_df = test_df.sort_index()
+    if train_df.empty or test_df.empty:
+        raise ValueError("Visibility chronological split generated an empty partition.")
+
+    y_train = train_df["visibility"]
+    y_test = test_df["visibility"]
+    sample_weights = _normalized_inverse_frequency_weights(y_train)
+    print(f"      -> Visibility sample-weight mean: {np.mean(sample_weights):.6f}")
+
+    current_visibility_leaks = {
         "visibility_trend",
         "visibility_acceleration",
-        "vis_drop_1",
-        "vis_drop_3",
-        "vis_drop_rate",
-        "vis_regime",
-        "low_visibility_flag",
-        "low_visibility_streak",
         "visibility_rolling_mean_3",
         "visibility_rolling_mean_6",
         "visibility_rolling_mean_12",
         "visibility_rolling_std_3",
         "visibility_rolling_std_6",
         "visibility_rolling_std_12",
-        "wind_speed",
-        "wind_gust",
-        "wind_direction",
-        "temp",
-        "pressure",
-        "humidity",
-        "dew_point",
     }
-    features = [
+    drop_cols = [
         column
-        for column in df.columns
-        if pd.api.types.is_numeric_dtype(df[column])
-        and column not in unsafe
-        and "target" not in column.lower()
+        for column in vis_df.columns
+        if (
+            ("vis" in column.lower()
+             and "lag" not in column.lower()
+             and "velocity" not in column.lower()
+             and "trend" not in column.lower()
+             and "roll" not in column.lower())
+            or column in current_visibility_leaks
+            or "target" in column.lower()
+            or column
+            in {
+                "datetime",
+                "temp",
+                "pressure",
+                "humidity",
+                "wind_speed",
+                "wind_gust",
+                "wind_direction",
+                "split_regime",
+            }
+        )
     ]
-    leaking = [feature for feature in features if feature == "visibility"]
-    if leaking:
-        raise ValueError(f"Leakage detected: {leaking}")
-    return features
-
-
-def _specialist_params(regime_id: int) -> dict:
-    params = {
-        "objective": "reg:squarederror",
-        "n_estimators": 1400,
-        "learning_rate": 0.02,
-        "max_depth": 7,
-        "min_child_weight": 1.0,
-        "gamma": 0.2,
-        "reg_lambda": 1.0,
-        "subsample": 0.85,
-        "colsample_bytree": 0.85,
-        "tree_method": "hist",
-        "device": "cuda",
-        "random_state": 42 + regime_id,
-        "n_jobs": -1,
-    }
-    if regime_id == 0:
-        params.update(max_depth=6, min_child_weight=0.25, gamma=0.0)
-    elif regime_id == 3:
-        params.update(max_depth=9, min_child_weight=2.0)
-    return params
-
-
-def train_and_predict(df_master: pd.DataFrame):
-    vis_df = add_vis_features(df_master)
-    split_idx = int(len(vis_df) * 0.85)
-    exclusion_mask = _flatline_exclusion_mask(vis_df["visibility"])
-    train_candidates = vis_df.iloc[:split_idx].copy()
-    test_candidates = vis_df.iloc[split_idx:].copy()
-    train_exclusion = exclusion_mask.iloc[:split_idx]
-    test_exclusion = exclusion_mask.iloc[split_idx:]
-    train_removed = int(train_exclusion.sum())
-    test_removed = int(test_exclusion.sum())
-    total_removed = train_removed + test_removed
-    removed_pct = 100.0 * total_removed / len(vis_df)
-    train_df = train_candidates.loc[~train_exclusion].copy()
-    test_df = test_candidates.loc[~test_exclusion].copy()
-    print(
-        "      -> Flatline rows removed: "
-        f"train={train_removed}, test={test_removed}, "
-        f"total={total_removed} ({removed_pct:.2f}%)"
+    features = list(
+        dict.fromkeys(
+            column
+            for column in vis_df.columns
+            if column not in drop_cols and pd.api.types.is_numeric_dtype(vis_df[column])
+        )
     )
-    if train_df.empty or test_df.empty:
-        raise ValueError("Visibility chronological split generated an empty partition.")
+    if "split_regime" in features or "visibility" in features:
+        raise ValueError("Visibility split label or target leaked into model features.")
 
-    features = _feature_columns(vis_df)
     X_train = train_df[features]
     X_test = test_df[features]
-    y_train = train_df["visibility"]
-    y_test = test_df["visibility"]
-    train_regimes = _regime_labels(y_train)
-    test_regimes = _regime_labels(y_test)
+    train_counts = train_df["split_regime"].value_counts().sort_index().to_dict()
+    test_counts = test_df["split_regime"].value_counts().sort_index().to_dict()
+    print(f"      -> Stratified regime counts: train={train_counts}, test={test_counts}")
 
-    classifier_counts = np.bincount(train_regimes, minlength=4)
-    classifier_weights = len(train_regimes) / (
-        4.0 * np.maximum(classifier_counts[train_regimes], 1)
-    )
-    classifier_weights /= np.mean(classifier_weights)
-
-    classifier = XGBClassifier(
-        objective="multi:softprob",
-        num_class=4,
-        eval_metric="mlogloss",
-        n_estimators=1000,
-        learning_rate=0.03,
-        max_depth=7,
-        min_child_weight=1.0,
-        gamma=0.2,
-        reg_lambda=1.0,
+    model = XGBRegressor(
+        n_estimators=2000,
+        learning_rate=0.015,
+        max_depth=8,
+        gamma=0.5,
         subsample=0.85,
         colsample_bytree=0.85,
         tree_method="hist",
         device="cuda",
+        objective="reg:squarederror",
         random_state=42,
         n_jobs=-1,
     )
-    print("      -> Fitting Visibility Regime Classifier (Soft Probabilities)...")
-    classifier.fit(X_train, train_regimes, sample_weight=classifier_weights, verbose=False)
-    train_probabilities = _predict_xgb(classifier, X_train)
-    test_probabilities = _predict_xgb(classifier, X_test)
+    print(f"      -> Fitting Visibility Specialist (Stratified Split, N={len(train_df)})...")
+    model.fit(X_train, y_train, sample_weight=sample_weights, verbose=False)
 
-    specialists = {}
-    specialist_predictions = []
-    for regime_id, regime_name in enumerate(REGIME_NAMES):
-        threshold = 0.25 if regime_id == 0 else 0.40
-        selected = train_probabilities[:, regime_id] > threshold
-        selected_count = int(selected.sum())
-        if selected_count == 0:
-            raise ValueError(
-                f"{regime_name} specialist has no rows with classifier probability above 0.5."
-            )
+    predictions = _predict_xgb(model, X_test)
+    predictions = np.clip(predictions, 150.0, 10000.0)
+    r2 = float(r2_score(y_test, predictions))
+    rmse = float(np.sqrt(mean_squared_error(y_test, predictions)))
+    mae = float(mean_absolute_error(y_test, predictions))
+    print(f"      -> Visibility metrics: R2 = {r2:.4f} | RMSE = {rmse:.4f} | MAE = {mae:.4f}")
 
-        selected_y = y_train.iloc[np.flatnonzero(selected)]
-        selected_X = X_train.iloc[np.flatnonzero(selected)]
-        weights = _normalized_inverse_frequency_weights(selected_y)
-        if regime_id == 0:
-            weights = weights * 2.0
-
-        specialist = XGBRegressor(**_specialist_params(regime_id))
-        print(f"      -> Fitting {regime_name} specialist on {selected_count} rows...")
-        specialist.fit(selected_X, selected_y, sample_weight=weights, verbose=False)
-        specialists[regime_name] = specialist
-        specialist_predictions.append(_predict_xgb(specialist, X_test))
-
-    prediction_matrix = np.column_stack(specialist_predictions)
-    amplifier_sensitivity = {}
-    candidate_predictions = {}
-    for amplifier in [1.5, 2.0, 3.0, 4.0]:
-        boosted_probabilities = test_probabilities.copy()
-        boosted_probabilities[:, 0] = np.clip(
-            test_probabilities[:, 0] * amplifier,
-            0.0,
-            1.0,
-        )
-        row_sums = boosted_probabilities.sum(axis=1, keepdims=True)
-        boosted_probabilities = boosted_probabilities / np.maximum(row_sums, 1e-9)
-        candidate = np.sum(boosted_probabilities * prediction_matrix, axis=1)
-        candidate = np.clip(candidate, 150.0, 10000.0)
-        amplifier_sensitivity[amplifier] = float(r2_score(y_test, candidate))
-        candidate_predictions[amplifier] = candidate
-
-    chosen_amplifier = max(amplifier_sensitivity, key=amplifier_sensitivity.get)
-    blended_prediction = candidate_predictions[chosen_amplifier]
-    print(
-        "      -> Floor amplifier sensitivity: "
-        + ", ".join(
-            f"{amplifier:.2f}={score:.4f}"
-            for amplifier, score in amplifier_sensitivity.items()
-        )
-    )
-    print(
-        f"      -> Chosen floor amplifier: {chosen_amplifier:.2f} "
-        f"(R2={amplifier_sensitivity[chosen_amplifier]:.4f})"
-    )
-
-    r2 = float(r2_score(y_test, blended_prediction))
-    rmse = float(np.sqrt(mean_squared_error(y_test, blended_prediction)))
-    mae = float(mean_absolute_error(y_test, blended_prediction))
-    print(f"      -> Visibility SMoE metrics: R2 = {r2:.4f} | RMSE = {rmse:.4f} | MAE = {mae:.4f}")
-
-    per_regime_mae = {}
-    for regime_id, regime_name in enumerate(REGIME_NAMES):
-        mask = test_regimes == regime_id
-        regime_mae = (
-            float(mean_absolute_error(y_test.iloc[np.flatnonzero(mask)], blended_prediction[mask]))
-            if mask.any()
-            else float("nan")
-        )
-        per_regime_mae[regime_name] = regime_mae
-        print(f"         {regime_name} MAE: {regime_mae:.3f} m ({int(mask.sum())} rows)")
-
-    bundle = {
-        "classifier": classifier,
-        "specialists": specialists,
-        "features": features,
-        "regime_names": REGIME_NAMES,
-        "per_regime_mae": per_regime_mae,
-        "flatline_rows_removed": {
-            "train": train_removed,
-            "test": test_removed,
-            "total": total_removed,
-            "percentage": removed_pct,
-        },
-        "floor_amplifier": chosen_amplifier,
-        "floor_amplifier_sensitivity": amplifier_sensitivity,
-    }
     Path("checkpoints").mkdir(parents=True, exist_ok=True)
-    _save_bundle_atomic(bundle, Path("checkpoints/visibility_sme_v2.joblib"))
-    _save_bundle_atomic(bundle, Path("checkpoints/visibility_sme.joblib"))
-    _save_bundle_atomic(bundle, Path("checkpoints/visibility_target_model.joblib"))
-    return y_test.values, blended_prediction
+    _save_bundle_atomic(
+        {"model": model, "features": features, "regime_counts": {"train": train_counts, "test": test_counts}},
+        Path("checkpoints/visibility_target_model.joblib"),
+    )
+    return y_test.values, predictions
