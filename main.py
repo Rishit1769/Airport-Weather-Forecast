@@ -6,6 +6,7 @@ import mod_pressure
 import mod_temperature
 import mod_visibility
 import mod_wind
+import mod_wind_v2
 
 logging.basicConfig(
     level=logging.INFO,
@@ -30,6 +31,9 @@ def main():
 
     print("Training Wind Specialist...")
     results["wind"] = mod_wind.train_and_predict(df)
+
+    print("Training Wind MOS Specialist...")
+    results["wind_v2"] = mod_wind_v2.train_and_predict(df)
 
     print("Generating Master Dashboard...")
     eval_engine.generate_combined_dashboard(results)

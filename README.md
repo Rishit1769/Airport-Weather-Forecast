@@ -2,7 +2,7 @@
 
 An XGBoost/CUDA micro-modular forecasting pipeline for CSMI Airport (VABB), Mumbai — six-hour horizon at 30-minute cadence from METAR sensor data. Built for the MWO Mumbai (IMD) and Thakur College of Engineering and Technology collaborative research proposal.
 
-> ⚠️ **Note on metric sourcing**: R² values in this README are sourced from the `docs/*.md` files, which document their values as having been read from the panel titles of `artifacts/plots/combined_dashboard.png`. The dashboard image itself could not be parsed programmatically (model limitation); these documented values are the best available record. All other facts are sourced from code inspection.
+> ⚠️ **Note on metric sourcing**: Metrics in this README are taken from the most recent local pipeline run on **July 24, 2026**, which regenerated `artifacts/plots/combined_dashboard.png` and logged the values programmatically. The wind MOS (`mod_wind_v2.py`) results are evaluated only on the overlapping period where Open-Meteo historical forecast data is available for VABB in practice: **2017-01-01 through 2025-12-31**.
 
 ---
 
@@ -10,16 +10,19 @@ An XGBoost/CUDA micro-modular forecasting pipeline for CSMI Airport (VABB), Mumb
 
 Operational gate threshold is **R² ≥ 0.90** for continuous targets. Wind direction uses circular MAE (degrees) since R² is geometrically invalid for angles.
 
-| Parameter | R² | Gate (≥0.90) | Status |
+| Parameter | R² / Circular MAE | Gate (≥0.90) | Status |
 |---|---|---|---|
 | Temperature | 0.9542 | ✅ | PASS |
-| Pressure | 0.9629 | ✅ | PASS |
-| Visibility | 0.9276 | ✅ | PASS |
-| Wind Speed | 0.7297 | ⚠️ | FAIL |
-| Wind Gust | 0.6487 | ⚠️ | FAIL |
-| Wind Direction | circular MAE 29.17° | ⚠️ | N/A (circular data) |
+| Pressure | 0.9628 | ✅ | PASS |
+| Visibility | 0.9279 | ✅ | PASS |
+| Wind Speed (baseline `mod_wind.py`) | 0.7286 | ⚠️ | FAIL |
+| Wind Speed (MOS `mod_wind_v2.py`, 2017-2025 overlap) | 0.7216 | ⚠️ | FAIL |
+| Wind Gust (baseline proxy target) | 0.6485 | ⚠️ | FAIL |
+| Wind Gust (MOS `mod_wind_v2.py`, proxy target) | 0.7361 | ⚠️ | FAIL |
+| Wind Direction (baseline `mod_wind.py`) | circular MAE 29.14° | ⚠️ | N/A (circular data) |
+| Wind Direction (MOS `mod_wind_v2.py`) | circular MAE 28.55° | ⚠️ | N/A (circular data) |
 
-**Gate summary: 3 of 6 parameters pass.** Wind parameters are below threshold due to inherent single-station spatial-blindspot limits and synthetic gust targets (0% observed gust coverage in source data). Wind direction is evaluated on circular MAE; the linear R² reported in the dashboard panel title (0.6859) is the minimum of U and V component R² scores and should not be used for operational gating of circular data.
+**Gate summary: 3 continuous parameters pass (temperature, pressure, visibility).** The additive MOS experiment improved gust and direction on the overlapping NWP window, but **did not lift wind speed past the existing single-station baseline and did not meet the 0.90 gate**. Gust remains evaluated against a synthetic proxy target because observed gust coverage in the source data is still 0%.
 
 ---
 
@@ -34,7 +37,9 @@ csmi-weather/
 ├── mod_temperature.py               # Specialist: ΔT delta prediction, solar thermal anchors, outage masks
 ├── mod_pressure.py                  # Specialist: 6-hour pressure regression via shared target framework
 ├── mod_visibility.py                # Specialist: inverse-frequency weighting, fog regime, flatline excision
-├── mod_wind.py                      # Specialist: U/V vector kinematics, quantile regression, gap protection
+├── mod_wind.py                      # Baseline wind specialist: U/V vector kinematics, quantile regression, gap protection
+├── mod_wind_v2.py                   # Additive MOS wind specialist: NWP residual correction for speed/gust + NWP-informed direction
+├── nwp_fetch.py                     # Open-Meteo historical forecast fetcher with yearly chunk caching and 30-min interpolation
 ├── docs/
 │   ├── temperature.md               # Engineering journey: persistence trap → delta prediction → EMA inertia
 │   ├── pressure.md                  # Engineering journey: synoptic lags, monsoon trough, tidal structure
@@ -413,7 +418,7 @@ Final dataframe: **169+ columns, float32 dtype**, indexed by `DatetimeIndex` at 
 
 ---
 
-### 6.4 Wind Specialist (`mod_wind.py`)
+### 6.4 Wind Specialists (`mod_wind.py`, `mod_wind_v2.py`)
 
 **Architecture**: Five independent XGBoost models — two squared-error models for U/V vector components (direction), and three quantile regression models at τ ∈ {0.10, 0.50, 0.90} (speed). The median (q50) is the operational point forecast; q10-q90 forms the prediction interval; q90 serves as a gust-potential proxy.
 
@@ -461,15 +466,20 @@ Final dataframe: **169+ columns, float32 dtype**, indexed by `DatetimeIndex` at 
 | Split | 85/15 chronological | 85/15 chronological | Temporal holdout |
 | Gap threshold | 1.0 hour | 1.0 hour | Reject discontinuous windows |
 
-**Current Metrics** (from dashboard, documented in `docs/wind.md`):
+**Current Metrics** (local run dated July 24, 2026):
 
-| Output | R² | RMSE | MAE | Additional |
-|---|---|---|---|---|
-| Median wind speed | **0.7297** | **1.89 kt** | **1.42 kt** | PICP=0.7281, width=4.30 kt |
-| q90 gust potential | **0.6487** | **3.01 kt** | **2.30 kt** | Compared with synthetic gust proxy |
-| Direction | 0.6859 (panel) | N/A | **29.17° circular** | U/V reconstruction |
+| Output | Model | R² | RMSE | MAE | Additional |
+|---|---|---|---|---|---|
+| Wind speed | Baseline `mod_wind.py` | **0.7286** | **1.89 kt** | **1.42 kt** | PICP=0.7294, width=4.29 kt |
+| Wind speed | MOS `mod_wind_v2.py` | **0.7216** | **1.92 kt** | **1.46 kt** | Evaluated on 2017-2025 NWP overlap only |
+| Wind gust | Baseline `mod_wind.py` | **0.6485** | **3.02 kt** | **2.30 kt** | Proxy target |
+| Wind gust | MOS `mod_wind_v2.py` | **0.7361** | **2.63 kt** | **2.03 kt** | Proxy target; NWP gust residual correction |
+| Wind direction | Baseline `mod_wind.py` | N/A | N/A | **29.14° circular** | U/V reconstruction |
+| Wind direction | MOS `mod_wind_v2.py` | N/A | N/A | **28.55° circular** | Adds NWP direction sin/cos inputs |
 
-> ⚠️ **Warning**: The gust target is synthetic — source data has 0% observed gust coverage, so `wind_gust = 1.4 × wind_speed`. Gust metrics evaluate a proxy, not independent observations.
+> ⚠️ **Warning**: The gust target is still synthetic — source data has 0% observed gust coverage, so `wind_gust = 1.4 × wind_speed`. The MOS path replaces the old q90-based gust proxy with NWP gust as the external anchor, but the verifying target is still not an independently observed gust series.
+
+> ⚠️ **Result summary**: The MOS experiment is additive and preserved the baseline module, but it did **not** improve wind-speed R² enough to justify replacing the current baseline. It remains useful as a documented comparison path and did improve proxy-gust R² and direction MAE.
 
 **Graveyard**: Independent speed/degree regressors (circular violation), U/V magnitude reconstruction (error compounding), Tweedie gust-delta model (too conservative), deep square-error trees (complexity can't manufacture missing spatial information), log-speed/log-gust models (plateaued near 0.70), pre-mask rolling features (bridged deleted periods), current-step rolling KE (algebraic speed leakage), q90 as direct gust forecast (underperforms proxy). → Full narrative: `docs/wind.md`.
 
@@ -500,9 +510,9 @@ Creates `artifacts/plots/combined_dashboard.png` — a 6-panel vertical time-ser
 | 1 | `Temperature (C) \| R2=X.XXXX` | Actual vs Predicted temperature |
 | 2 | `Pressure (hPa) \| R2=X.XXXX` | Actual vs Predicted pressure |
 | 3 | `Visibility (m) \| R2=X.XXXX` | Actual vs Predicted visibility |
-| 4 | `Wind Speed (kt), PICP10-90=X.XXX \| R2=X.XXXX` | Actual vs Predicted with 10-90% interval band |
-| 5 | `Wind Gust (kt) \| R2=X.XXXX` | Actual vs Predicted wind gust |
-| 6 | `Wind Direction (deg), circular MAE=XX.XX \| R2=X.XXXX` | Actual vs Predicted wind direction |
+| 4 | `Wind Speed (kt), baseline PICP10-90=... , MOS PICP10-90=... \| R2 baseline=..., MOS=...` | Actual vs baseline prediction, MOS prediction, and MOS NWP anchor with interval band |
+| 5 | `Wind Gust (kt) \| R2 baseline=..., MOS=...` | Actual vs baseline gust, MOS gust, and MOS NWP gust anchor |
+| 6 | `Wind Direction (deg), baseline circular MAE=..., MOS circular MAE=...` | Actual vs baseline direction and MOS direction |
 
 The wind speed panel includes a shaded 10-90% prediction interval band. All panels include grid lines (alpha=0.25) and legends. After saving, the script cleans up any stale PNG files in the plots directory.
 
@@ -663,6 +673,12 @@ These 8 files are saved by the current `main.py` pipeline:
 | `wind_speed_q10_model.joblib` | `mod_wind.py` | Raw `XGBRegressor` (2500 estimators, quantile α=0.10) |
 | `wind_speed_q50_model.joblib` | `mod_wind.py` | Raw `XGBRegressor` (2500 estimators, quantile α=0.50) |
 | `wind_speed_q90_model.joblib` | `mod_wind.py` | Raw `XGBRegressor` (2500 estimators, quantile α=0.90) |
+| `wind_v2_u_model.joblib` | `mod_wind_v2.py` | Raw `XGBRegressor` (2500 estimators, NWP-informed U-component) |
+| `wind_v2_v_model.joblib` | `mod_wind_v2.py` | Raw `XGBRegressor` (2500 estimators, NWP-informed V-component) |
+| `wind_v2_gust_residual_model.joblib` | `mod_wind_v2.py` | Raw `XGBRegressor` for gust residual vs NWP gust |
+| `wind_v2_speed_residual_q10_model.joblib` | `mod_wind_v2.py` | Raw `XGBRegressor` residual quantile α=0.10 |
+| `wind_v2_speed_residual_q50_model.joblib` | `mod_wind_v2.py` | Raw `XGBRegressor` residual quantile α=0.50 |
+| `wind_v2_speed_residual_q90_model.joblib` | `mod_wind_v2.py` | Raw `XGBRegressor` residual quantile α=0.90 |
 
 ### Legacy Checkpoints (Not Used by Modular Pipeline)
 
@@ -694,14 +710,14 @@ These 8 files are saved by the current `main.py` pipeline:
 | Metric | Value |
 |---|---|
 | Total specialist modules | 4 |
-| Total XGBoost models trained (modular pipeline) | 8 (temp × 1, pressure × 1, vis × 1, wind: U × 1, V × 1, q10/q50/q90 × 3) |
+| Total XGBoost models trained (modular pipeline) | 14 (temp × 1, pressure × 1, vis × 1, baseline wind × 5, MOS wind × 6) |
 | Total engineered features — visibility module | 175 (in saved bundle; source code generates ~60 module-specific + inherits shared families) |
 | Total engineered features — master frame | 169+ (from `feature_columns.json`; modular pipeline selects subsets per specialist) |
 | Training data span | 10 years (2016-01 to 2025-12) at 30-min intervals |
 | Approximate training rows | ~175,200 (10 years × 365 days × 48 intervals/day) |
-| Parameters passing R² ≥ 0.90 gate | 3 (temperature 0.9542, pressure 0.9629, visibility 0.9276) |
-| Active modular checkpoint files | 8 |
-| Total checkpoint files on disk | 27 (8 active + 7 legacy + 11 TFT + 2 metadata) |
+| Parameters passing R² ≥ 0.90 gate | 3 (temperature 0.9542, pressure 0.9628, visibility 0.9279) |
+| Active modular checkpoint files | 14 |
+| Total checkpoint files on disk | 33 (14 active + 7 legacy + 11 TFT + 2 metadata) |
 | Wind gust observed coverage | 0% (entirely synthetic via 1.4× multiplier) |
 | Rows removed by flatline excision (visibility) | 152,546 (87.03%) |
 | Rows removed by anemometer mask (wind) | 35,762 (20.40%) |
@@ -718,8 +734,8 @@ These 8 files are saved by the current `main.py` pipeline:
 | TD-004 | No prediction confidence intervals except wind speed | All modules except wind | Dashboard cannot show uncertainty bands for temperature, pressure, visibility, or gust | **High** |
 | TD-005 | Hardcoded 85/15 split — no cross-validation | `mod_temperature.py`, `mod_wind.py` | Single split may be unrepresentative; no estimate of metric variance | **Medium** |
 | TD-006 | Three different split strategies across four modules | `mod_temperature.py` (85/15 chrono), `mod_pressure.py` (date-based via model_common), `mod_visibility.py` (stratified random 85/15), `mod_wind.py` (85/15 chrono) | Inconsistent evaluation methodology; visibility uses random split which may leak temporal structure | **Medium** |
-| TD-007 | Synthetic gust target (1.4× multiplier) evaluated as if real | `data_pipeline.py:126-131`, `mod_wind.py` | Gust R² of 0.6487 measures how well the model predicts a synthetic proxy, not actual gusts. 0% observed coverage means no ground truth exists | **High** |
-| TD-008 | Wind speed PICP (0.7281) below nominal 0.80 | `mod_wind.py:265-268` | The 10-90% prediction interval captures only 72.8% of observations — less calibrated than expected | **Medium** |
+| TD-007 | Synthetic gust target (1.4× multiplier) evaluated as if real | `data_pipeline.py:126-131`, `mod_wind.py`, `mod_wind_v2.py` | Even after MOS correction, gust verification is against a synthetic proxy, not observed gusts. Baseline gust R²=0.6485 and MOS gust R²=0.7361 still do not measure real gust skill | **High** |
+| TD-008 | Wind speed interval calibration remains below nominal 0.80 | `mod_wind.py`, `mod_wind_v2.py` | Baseline PICP=0.7294 and MOS PICP=0.7256, so neither wind path is yet well-calibrated at the 10-90% interval level | **Medium** |
 | TD-009 | Stale `eval_metrics.json` and `model_metadata.json` from monolithic pipeline | `artifacts/eval_metrics.json`, `checkpoints/model_metadata.json` | Contains outdated metrics (temp R²=0.8235 vs current 0.9542). No automated sync with modular pipeline | **Medium** |
 | TD-010 | Visibility stratified split uses `train_test_split` — may not preserve temporal order | `mod_visibility.py:157-164` | Rows are shuffled before splitting by regime, then re-sorted. A fog event could have timestamps in both train and test | **Medium** |
 | TD-011 | TFT experiments in `lightning_logs/` and `.ckpt` files — abandoned but no cleanup | `lightning_logs/`, `checkpoints/tft_*.ckpt` | Dead code and stale artifacts. 11 `.ckpt` files occupy disk space with no documentation of results | **Low** |

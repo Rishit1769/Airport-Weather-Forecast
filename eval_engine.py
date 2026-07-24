@@ -13,9 +13,10 @@ DASHBOARD_PATH = PLOTS_DIR / "combined_dashboard.png"
 
 def _series_from_results(results_dict):
     wind = results_dict["wind"]
+    wind_v2 = results_dict.get("wind_v2")
     temp_true, temp_pred = results_dict["temp"]
     visibility_true, visibility_pred = results_dict["visibility"]
-    return [
+    panels = [
         (
             "Temperature (C)",
             {
@@ -36,21 +37,135 @@ def _series_from_results(results_dict):
             },
         ),
         (
-            (
-                "Wind Speed (kt), "
-                f"PICP10-90={wind['wind_speed']['picp_10_90']:.3f}"
-            ),
-            {"index": wind["index"], **wind["wind_speed"]},
+            _wind_speed_title(wind, wind_v2),
+            _wind_speed_panel(wind, wind_v2),
         ),
         (
-            "Wind Gust (kt)",
-            {"index": wind["index"], **wind["wind_gust"]},
+            _wind_gust_title(wind, wind_v2),
+            _wind_gust_panel(wind, wind_v2),
         ),
         (
-            f"Wind Direction (deg), circular MAE={wind['wind_dir']['circular_mae_deg']:.2f}",
-            {"index": wind["index"], **wind["wind_dir"]},
+            _wind_dir_title(wind, wind_v2),
+            _wind_dir_panel(wind, wind_v2),
         ),
     ]
+    return panels
+
+
+def _wind_speed_title(wind, wind_v2):
+    title = (
+        "Wind Speed (kt), "
+        f"baseline PICP10-90={wind['wind_speed']['picp_10_90']:.3f}"
+    )
+    if wind_v2 is not None:
+        title += (
+            f", MOS PICP10-90={wind_v2['wind_speed']['picp_10_90']:.3f} | "
+            f"R2 baseline={wind['wind_speed']['metrics']['r2']:.4f}, "
+            f"MOS={wind_v2['wind_speed']['metrics']['r2']:.4f}"
+        )
+    return title
+
+
+def _wind_gust_title(wind, wind_v2):
+    title = "Wind Gust (kt)"
+    if wind_v2 is not None:
+        title += (
+            f" | R2 baseline={wind['wind_gust']['metrics']['r2']:.4f}, "
+            f"MOS={wind_v2['wind_gust']['metrics']['r2']:.4f}"
+        )
+    return title
+
+
+def _wind_dir_title(wind, wind_v2):
+    title = (
+        "Wind Direction (deg), "
+        f"baseline circular MAE={wind['wind_dir']['circular_mae_deg']:.2f}"
+    )
+    if wind_v2 is not None:
+        title += f", MOS circular MAE={wind_v2['wind_dir']['circular_mae_deg']:.2f}"
+    return title
+
+
+def _wind_speed_panel(wind, wind_v2):
+    panel = {
+        "index": wind["index"],
+        "y_true": wind["wind_speed"]["y_true"],
+        "y_pred": wind["wind_speed"]["y_pred"],
+        "metrics": wind["wind_speed"]["metrics"],
+        "quantiles": wind["wind_speed"]["quantiles"],
+        "comparison": [],
+    }
+    if wind_v2 is not None:
+        panel["comparison"].append(
+            {
+                "label": "MOS Predicted",
+                "index": wind_v2["index"],
+                "y": wind_v2["wind_speed"]["y_pred"],
+                "color": "tab:orange",
+                "alpha": 0.85,
+            }
+        )
+        panel["comparison"].append(
+            {
+                "label": "MOS NWP Baseline",
+                "index": wind_v2["index"],
+                "y": wind_v2["wind_speed"]["baseline_pred"],
+                "color": "tab:green",
+                "alpha": 0.65,
+            }
+        )
+    return panel
+
+
+def _wind_gust_panel(wind, wind_v2):
+    panel = {
+        "index": wind["index"],
+        "y_true": wind["wind_gust"]["y_true"],
+        "y_pred": wind["wind_gust"]["y_pred"],
+        "metrics": wind["wind_gust"]["metrics"],
+        "comparison": [],
+    }
+    if wind_v2 is not None:
+        panel["comparison"].append(
+            {
+                "label": "MOS Predicted",
+                "index": wind_v2["index"],
+                "y": wind_v2["wind_gust"]["y_pred"],
+                "color": "tab:orange",
+                "alpha": 0.85,
+            }
+        )
+        panel["comparison"].append(
+            {
+                "label": "MOS NWP Baseline",
+                "index": wind_v2["index"],
+                "y": wind_v2["wind_gust"]["baseline_pred"],
+                "color": "tab:green",
+                "alpha": 0.65,
+            }
+        )
+    return panel
+
+
+def _wind_dir_panel(wind, wind_v2):
+    panel = {
+        "index": wind["index"],
+        "y_true": wind["wind_dir"]["y_true"],
+        "y_pred": wind["wind_dir"]["y_pred"],
+        "component_metrics": wind["wind_dir"]["component_metrics"],
+        "comparison": [],
+    }
+    if wind_v2 is not None:
+        panel["comparison"].append(
+            {
+                "label": "MOS Predicted",
+                "index": wind_v2["index"],
+                "y": wind_v2["wind_dir"]["y_pred"],
+                "color": "tab:orange",
+                "alpha": 0.85,
+            }
+        )
+    return panel
 
 
 def _r2_for_result(result):
@@ -69,7 +184,7 @@ def generate_combined_dashboard(results_dict):
         y_pred = np.asarray(result["y_pred"], dtype=np.float64)
         index = result["index"]
         ax.plot(index, y_true, label="Actual", linewidth=0.8)
-        ax.plot(index, y_pred, label="Predicted", linewidth=0.8, alpha=0.8)
+        ax.plot(index, y_pred, label="Baseline Predicted", linewidth=0.8, alpha=0.75)
         if "quantiles" in result:
             lower = np.asarray(result["quantiles"]["q_0.10"], dtype=np.float64)
             upper = np.asarray(result["quantiles"]["q_0.90"], dtype=np.float64)
@@ -78,9 +193,21 @@ def generate_combined_dashboard(results_dict):
                 lower,
                 upper,
                 alpha=0.18,
-                label="10-90% interval",
+                label="Baseline 10-90% interval",
             )
-        ax.set_title(f"{title} | R2={_r2_for_result(result):.4f}")
+        for comparison in result.get("comparison", []):
+            ax.plot(
+                comparison["index"],
+                np.asarray(comparison["y"], dtype=np.float64),
+                label=comparison["label"],
+                linewidth=0.8,
+                alpha=comparison.get("alpha", 0.8),
+                color=comparison.get("color"),
+            )
+        if "R2 baseline=" not in title and "circular MAE" not in title:
+            ax.set_title(f"{title} | R2={_r2_for_result(result):.4f}")
+        else:
+            ax.set_title(title)
         ax.grid(True, alpha=0.25)
         ax.legend(loc="upper right", fontsize=8)
 
@@ -107,6 +234,18 @@ def generate_combined_dashboard(results_dict):
                 result["wind_dir"]["circular_mae_deg"],
                 result["wind_speed"]["picp_10_90"],
                 result["wind_speed"]["mean_interval_width"],
+            )
+        elif target_name == "wind_v2":
+            logger.info(
+                "Wind MOS metrics: speed=%s gust=%s direction_circular_mae=%.3f "
+                "picp_10_90=%.4f interval_width=%.4f baseline_speed=%s baseline_gust=%s",
+                result["wind_speed"]["metrics"],
+                result["wind_gust"]["metrics"],
+                result["wind_dir"]["circular_mae_deg"],
+                result["wind_speed"]["picp_10_90"],
+                result["wind_speed"]["mean_interval_width"],
+                result["wind_speed"]["baseline_metrics"],
+                result["wind_gust"]["baseline_metrics"],
             )
         elif target_name in {"temp", "visibility"}:
             y_true, y_pred = result
